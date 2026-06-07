@@ -60,18 +60,25 @@ class CloudAIRunner:
 
         stdout_path = run_dir / "stdout.log"
         with open(stdout_path, "w") as stdout_file:
-            proc = subprocess.run(
-                cmd,
-                stdout=stdout_file,
-                stderr=subprocess.STDOUT,
-                timeout=self.timeout_sec,
-            )
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    stdout=stdout_file,
+                    stderr=subprocess.STDOUT,
+                    timeout=self.timeout_sec,
+                )
+                returncode = proc.returncode
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                # Treat launch and timeout failures as failed runs so the CLI can
+                # mark the experiment failed instead of leaving it "running".
+                stdout_file.write(f"autotune: failed to run {self.cloudai_bin!r}: {exc}\n")
+                returncode = -1
 
         return RunResult(
             run_id=run_id,
             config_path=config_path,
             run_dir=run_dir,
-            returncode=proc.returncode,
+            returncode=returncode,
             stdout_path=stdout_path,
             report_path=report_path if report_path.exists() else None,
         )

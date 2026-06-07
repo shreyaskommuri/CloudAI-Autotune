@@ -5,6 +5,9 @@ venv/
 *.egg-info/
 .pytest_cache/
 
+# personal scratch notes (gaps/observations for upstream contribution)
+notes/
+
 # experiment artifacts
 runs/*
 !runs/.gitkeep
