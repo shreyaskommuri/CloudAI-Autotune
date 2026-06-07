@@ -13,5 +13,7 @@ runs/*
 !runs/.gitkeep
 reports/*
 !reports/.gitkeep
+!reports/examples/
+!reports/examples/*.json
 *.db
 *.sqlite3

@@ -6,6 +6,9 @@ scenarios, parses the results, tracks every experiment in SQLite, compares
 configs over time, and recommends the next config to try.
 
 It is **not** a benchmark engine — it's a control layer on top of CloudAI.
+It also does not replay storage traces, simulate POSIX/S3 workloads, or
+benchmark checkpoint I/O; it focuses on benchmark experiment management and LLM
+serving config optimization.
 
 ```
 Run 1: batch_size = 1   ->  120 tok/s,  90 ms latency
@@ -98,6 +101,27 @@ Launch the dashboard:
 ```bash
 streamlit run dashboard/app.py
 ```
+
+## Demo without CloudAI
+
+You can try the experiment tracking and recommendation loop without a CloudAI
+installation or GPU cluster by ingesting the sample reports:
+
+```bash
+autotune ingest reports/examples/vllm_batch1.json \
+  --config configs/examples/vllm_baseline.toml
+autotune ingest reports/examples/vllm_batch4.json \
+  --config configs/examples/vllm_batch4.toml
+autotune ingest reports/examples/vllm_batch8.json \
+  --config configs/examples/vllm_batch8.toml
+
+autotune list
+autotune recommend --knob serving.batch_size --latency-budget-ms 200
+```
+
+The recommender is an MVP heuristic: it compares the throughput gain against
+latency growth for a single tunable knob, then suggests the next value to try
+or a better observed tradeoff within the latency budget.
 
 ## Development
 

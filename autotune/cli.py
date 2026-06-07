@@ -78,6 +78,34 @@ def list_experiments(db_path: str, scenario: Optional[str]) -> None:
 
 
 @cli.command()
+@click.argument("report_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--config", "config_path", required=True, type=click.Path(exists=True, path_type=Path))
+@click.option("--db", "db_path", default="autotune.db", help="Path to the experiment database.")
+def ingest(report_path: Path, config_path: Path, db_path: str) -> None:
+    """Record an existing CloudAI report without launching CloudAI."""
+    config = config_mutator.load_config(config_path)
+    scenario = config.get("scenario", {})
+    metrics = parse_report(report_path)
+
+    with ExperimentDB(db_path) as db:
+        experiment_id = db.add_experiment(
+            scenario=scenario.get("name", config_path.stem),
+            backend=scenario.get("backend", "unknown"),
+            config_path=str(config_path),
+            config=config,
+            status="completed",
+        )
+        db.update_result(
+            experiment_id,
+            status="completed",
+            report_path=str(report_path),
+            metrics=metrics,
+        )
+
+    click.echo(f"[{experiment_id}] ingested {report_path} — {metrics}")
+
+
+@cli.command()
 @click.option("--db", "db_path", default="autotune.db")
 @click.option("--scenario", default=None, help="Restrict recommendation to one scenario's history.")
 @click.option("--knob", default=DEFAULT_KNOB, help="Dotted config key to tune, e.g. serving.batch_size.")
