@@ -1,0 +1,110 @@
+"""Parse CloudAI benchmark reports/logs into a normalized metrics dict.
+
+CloudAI scenarios can emit either a structured JSON report or plain-text
+stdout/log output depending on the backend. This parser supports both,
+normalizing everything into the metric set Autotune tracks:
+
+    latency_ms, throughput_tokens_per_sec, runtime_sec, failure_rate
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Optional
+
+METRIC_KEYS = (
+    "latency_ms",
+    "throughput_tokens_per_sec",
+    "runtime_sec",
+    "failure_rate",
+)
+
+# Aliases seen across CloudAI backend report formats, mapped to our normalized keys.
+_JSON_ALIASES: dict[str, tuple[str, ...]] = {
+    "latency_ms": ("latency_ms", "latency", "p50_latency_ms", "mean_latency_ms"),
+    "throughput_tokens_per_sec": (
+        "throughput_tokens_per_sec",
+        "throughput",
+        "tokens_per_sec",
+        "tokens_per_second",
+    ),
+    "runtime_sec": ("runtime_sec", "runtime", "duration_sec", "elapsed_sec"),
+    "failure_rate": ("failure_rate", "error_rate", "failed_ratio"),
+}
+
+# Regex fallbacks for free-text logs, e.g. "Throughput: 330.5 tokens/sec".
+_TEXT_PATTERNS: dict[str, re.Pattern[str]] = {
+    "latency_ms": re.compile(r"latency[^0-9\-]*([\d.]+)\s*ms", re.IGNORECASE),
+    "throughput_tokens_per_sec": re.compile(
+        r"throughput[^0-9\-]*([\d.]+)\s*tokens?\s*/\s*s(ec)?", re.IGNORECASE
+    ),
+    "runtime_sec": re.compile(r"runtime[^0-9\-]*([\d.]+)\s*s(ec)?", re.IGNORECASE),
+    "failure_rate": re.compile(r"failure[ _-]?rate[^0-9\-]*([\d.]+)", re.IGNORECASE),
+}
+
+
+def parse_report(path: Path | str) -> dict[str, Optional[float]]:
+    """Parse a CloudAI report file (JSON or text) into normalized metrics.
+
+    Unknown/missing metrics are returned as None rather than omitted, so
+    downstream consumers can rely on a stable key set.
+    """
+    text = Path(path).read_text()
+
+    metrics: dict[str, Optional[float]] = {key: None for key in METRIC_KEYS}
+
+    data = _try_parse_json(text)
+    if data is not None:
+        metrics.update(_extract_from_json(data))
+    else:
+        metrics.update(_extract_from_text(text))
+
+    return metrics
+
+
+def _try_parse_json(text: str) -> Optional[Any]:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _extract_from_json(data: Any) -> dict[str, Optional[float]]:
+    flat = _flatten(data)
+    result: dict[str, Optional[float]] = {}
+    for norm_key, aliases in _JSON_ALIASES.items():
+        for alias in aliases:
+            if alias in flat:
+                result[norm_key] = _to_float(flat[alias])
+                break
+    return result
+
+
+def _extract_from_text(text: str) -> dict[str, Optional[float]]:
+    result: dict[str, Optional[float]] = {}
+    for norm_key, pattern in _TEXT_PATTERNS.items():
+        match = pattern.search(text)
+        if match:
+            result[norm_key] = _to_float(match.group(1))
+    return result
+
+
+def _flatten(data: Any, prefix: str = "") -> dict[str, Any]:
+    """Flatten nested dicts so 'metrics.latency' is also reachable as 'latency'."""
+    flat: dict[str, Any] = {}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            full_key = f"{prefix}.{key}" if prefix else key
+            flat[full_key] = value
+            flat.setdefault(key, value)
+            flat.update(_flatten(value, full_key))
+    return flat
+
+
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

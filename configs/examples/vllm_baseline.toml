@@ -1,0 +1,18 @@
+[scenario]
+name = "vllm_baseline"
+backend = "vllm"
+description = "Baseline vLLM serving benchmark"
+
+[model]
+name = "meta-llama/Llama-3-8b"
+dtype = "fp16"
+tensor_parallel_size = 1
+
+[serving]
+batch_size = 1
+max_tokens = 256
+num_requests = 100
+
+[run]
+warmup_requests = 10
+timeout_seconds = 600

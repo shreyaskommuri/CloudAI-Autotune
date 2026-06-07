@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# experiment artifacts
+runs/*
+!runs/.gitkeep
+reports/*
+!reports/.gitkeep
+*.db
+*.sqlite3
