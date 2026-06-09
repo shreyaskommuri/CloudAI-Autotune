@@ -1,0 +1,1 @@
+{"request_throughput": 42.5, "mean_ttft_ms": 18.2, "median_ttft_ms": 17.4, "p99_ttft_ms": 31.8, "mean_tpot_ms": 4.1, "median_tpot_ms": 3.9, "p99_tpot_ms": 7.2, "max_concurrency": 8, "input_lens": [128, 128, 128, 128], "completed": 97, "num_prompts": 100}

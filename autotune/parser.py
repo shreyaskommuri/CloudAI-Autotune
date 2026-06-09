@@ -23,12 +23,20 @@ METRIC_KEYS = (
 
 # Aliases seen across CloudAI backend report formats, mapped to our normalized keys.
 _JSON_ALIASES: dict[str, tuple[str, ...]] = {
-    "latency_ms": ("latency_ms", "latency", "p50_latency_ms", "mean_latency_ms"),
+    "latency_ms": (
+        "latency_ms",
+        "latency",
+        "p50_latency_ms",
+        "mean_latency_ms",
+        "mean_ttft_ms",
+    ),
     "throughput_tokens_per_sec": (
         "throughput_tokens_per_sec",
         "throughput",
         "tokens_per_sec",
         "tokens_per_second",
+        "request_throughput",
+        "output_throughput",
     ),
     "runtime_sec": ("runtime_sec", "runtime", "duration_sec", "elapsed_sec"),
     "failure_rate": ("failure_rate", "error_rate", "failed_ratio"),
@@ -56,6 +64,8 @@ def parse_report(path: Path | str) -> dict[str, Optional[float]]:
     metrics: dict[str, Optional[float]] = {key: None for key in METRIC_KEYS}
 
     data = _try_parse_json(text)
+    if data is None:
+        data = _try_parse_jsonl(text)
     if data is not None:
         metrics.update(_extract_from_json(data))
     else:
@@ -71,6 +81,17 @@ def _try_parse_json(text: str) -> Optional[Any]:
         return None
 
 
+def _try_parse_jsonl(text: str) -> Optional[Any]:
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parsed = _try_parse_json(line)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _extract_from_json(data: Any) -> dict[str, Optional[float]]:
     flat = _flatten(data)
     result: dict[str, Optional[float]] = {}
@@ -79,6 +100,8 @@ def _extract_from_json(data: Any) -> dict[str, Optional[float]]:
             if alias in flat:
                 result[norm_key] = _to_float(flat[alias])
                 break
+    if "failure_rate" not in result:
+        result["failure_rate"] = _failure_rate_from_counts(flat)
     return result
 
 
@@ -108,3 +131,11 @@ def _to_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _failure_rate_from_counts(flat: dict[str, Any]) -> Optional[float]:
+    completed = _to_float(flat.get("completed"))
+    total = _to_float(flat.get("num_prompts"))
+    if completed is None or total in (None, 0):
+        return None
+    return max(0.0, min(1.0, 1.0 - completed / total))

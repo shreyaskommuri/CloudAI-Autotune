@@ -39,3 +39,24 @@ def test_ingest_records_existing_report_and_recommendation(tmp_path):
     )
     assert recommended.exit_code == 0
     assert "Suggested: 4.0" in recommended.output
+
+
+def test_ingest_accepts_cloudai_sglang_jsonl_report(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "sglang.db"
+
+    result = runner.invoke(
+        cli,
+        [
+            "ingest",
+            "reports/examples/sglang_bench.jsonl",
+            "--config",
+            "configs/examples/sglang_baseline.toml",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "throughput_tokens_per_sec': 42.5" in result.output
+    assert "failure_rate': 0.030000" in result.output

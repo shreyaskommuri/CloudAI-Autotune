@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from autotune.parser import parse_report
 
 
@@ -30,6 +32,24 @@ def test_parse_json_report_with_aliases_and_nesting(tmp_path):
 
     assert metrics["throughput_tokens_per_sec"] == 120.0
     assert metrics["latency_ms"] == 90.0
+
+
+def test_parse_cloudai_sglang_jsonl_report(tmp_path):
+    report = {
+        "request_throughput": 42.5,
+        "mean_ttft_ms": 18.2,
+        "num_prompts": 100,
+        "completed": 97,
+        "mean_tpot_ms": 4.1,
+    }
+    path = tmp_path / "sglang-bench.jsonl"
+    path.write_text("\n" + json.dumps(report) + "\n")
+
+    metrics = parse_report(path)
+
+    assert metrics["throughput_tokens_per_sec"] == 42.5
+    assert metrics["latency_ms"] == 18.2
+    assert metrics["failure_rate"] == pytest.approx(0.03)
 
 
 def test_parse_text_log_via_regex(tmp_path):

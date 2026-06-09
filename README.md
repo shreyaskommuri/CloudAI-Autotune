@@ -114,6 +114,8 @@ autotune ingest reports/examples/vllm_batch4.json \
   --config configs/examples/vllm_batch4.toml
 autotune ingest reports/examples/vllm_batch8.json \
   --config configs/examples/vllm_batch8.toml
+autotune ingest reports/examples/sglang_bench.jsonl \
+  --config configs/examples/sglang_baseline.toml
 
 autotune list
 autotune recommend --knob serving.batch_size --latency-budget-ms 200

@@ -16,5 +16,6 @@ reports/*
 !reports/.gitkeep
 !reports/examples/
 !reports/examples/*.json
+!reports/examples/*.jsonl
 *.db
 *.sqlite3
