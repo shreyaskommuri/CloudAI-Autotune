@@ -82,14 +82,21 @@ def _try_parse_json(text: str) -> Optional[Any]:
 
 
 def _try_parse_jsonl(text: str) -> Optional[Any]:
+    best: Optional[Any] = None
+    best_score = 0
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
         parsed = _try_parse_json(line)
-        if parsed is not None:
-            return parsed
-    return None
+        if parsed is None:
+            continue
+        extracted = _extract_from_json(parsed)
+        score = sum(value is not None for value in extracted.values())
+        if score >= best_score:
+            best = parsed
+            best_score = score
+    return best if best_score > 0 else None
 
 
 def _extract_from_json(data: Any) -> dict[str, Optional[float]]:

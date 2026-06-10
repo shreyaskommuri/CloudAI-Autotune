@@ -52,6 +52,24 @@ def test_parse_cloudai_sglang_jsonl_report(tmp_path):
     assert metrics["failure_rate"] == pytest.approx(0.03)
 
 
+def test_parse_jsonl_uses_summary_line_when_earlier_lines_are_events(tmp_path):
+    event = {"event": "request_completed", "latency_ms": 12.0}
+    summary = {
+        "request_throughput": 42.5,
+        "mean_ttft_ms": 18.2,
+        "num_prompts": 100,
+        "completed": 97,
+    }
+    path = tmp_path / "sglang-bench.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in (event, summary)))
+
+    metrics = parse_report(path)
+
+    assert metrics["throughput_tokens_per_sec"] == 42.5
+    assert metrics["latency_ms"] == 18.2
+    assert metrics["failure_rate"] == pytest.approx(0.03)
+
+
 def test_parse_text_log_via_regex(tmp_path):
     log = (
         "Starting benchmark...\n"
