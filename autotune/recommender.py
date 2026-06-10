@@ -70,6 +70,7 @@ def recommend_next(
         )
 
     completed.sort(key=lambda e: _knob_value(e, knob))
+    tried_values = {_knob_value(e, knob) for e in completed}
     latest = completed[-1]
     latest_value = _knob_value(latest, knob)
     latest_throughput = latest.metrics.get("throughput_tokens_per_sec")
@@ -80,30 +81,40 @@ def recommend_next(
         candidates = [e for e in completed if (e.metrics.get("latency_ms") or 0) <= latency_budget_ms]
         if candidates:
             best = max(candidates, key=lambda e: _efficiency(e) or 0)
+            best_value = _knob_value(best, knob)
+            suggested = _untried_between(
+                best_value,
+                latest_value,
+                tried_values,
+            ) or _next_lower_untried(best_value, tried_values)
             return Recommendation(
                 knob=knob,
                 current_value=latest_value,
-                suggested_value=_knob_value(best, knob),
+                suggested_value=suggested,
                 reason=(
                     f"{knob}={latest_value} pushed latency to {latest_latency:.0f}ms, "
-                    f"over the {latency_budget_ms:.0f}ms budget. Back off to {knob}="
-                    f"{_knob_value(best, knob)}, the best tradeoff within budget "
+                    f"over the {latency_budget_ms:.0f}ms budget. Best observed tradeoff "
+                    f"within budget was {knob}={best_value} "
                     f"({best.metrics.get('throughput_tokens_per_sec'):.0f} tok/s @ "
-                    f"{best.metrics.get('latency_ms'):.0f}ms)."
+                    f"{best.metrics.get('latency_ms'):.0f}ms). Try untested {knob}="
+                    f"{suggested} near that safer region."
                 ),
             )
+        smallest_value = _knob_value(completed[0], knob)
+        suggested = _next_lower_untried(smallest_value, tried_values)
         return Recommendation(
             knob=knob,
             current_value=latest_value,
-            suggested_value=completed[0].config and _knob_value(completed[0], knob),
+            suggested_value=suggested,
             reason=(
                 f"All runs exceed the {latency_budget_ms:.0f}ms latency budget. "
-                f"Try a smaller {knob} than {completed[0].config and _knob_value(completed[0], knob)}."
+                f"Try untested {knob}={suggested}, smaller than the lowest value "
+                f"already tried ({smallest_value})."
             ),
         )
 
     if len(completed) == 1:
-        suggested = latest_value * 2
+        suggested = _next_higher_untried(latest_value, tried_values)
         return Recommendation(
             knob=knob,
             current_value=latest_value,
@@ -123,7 +134,7 @@ def recommend_next(
     latency_gain = _pct_change(prev_latency, latest_latency)
 
     if throughput_gain is not None and latency_gain is not None and throughput_gain > latency_gain:
-        suggested = latest_value * 2
+        suggested = _next_higher_untried(latest_value, tried_values)
         return Recommendation(
             knob=knob,
             current_value=latest_value,
@@ -137,16 +148,22 @@ def recommend_next(
         )
 
     best = max(completed, key=lambda e: _efficiency(e) or 0)
+    best_value = _knob_value(best, knob)
+    suggested = _untried_between(best_value, latest_value, tried_values) or _nearest_untried(
+        best_value,
+        tried_values,
+    )
     return Recommendation(
         knob=knob,
         current_value=latest_value,
-        suggested_value=_knob_value(best, knob),
+        suggested_value=suggested,
         reason=(
             f"Latency is now growing faster than throughput "
             f"({latency_gain:+.0%} vs {throughput_gain:+.0%}). "
-            f"Best tradeoff so far is {knob}={_knob_value(best, knob)} "
+            f"Best tradeoff so far is {knob}={best_value} "
             f"({best.metrics.get('throughput_tokens_per_sec'):.0f} tok/s @ "
-            f"{best.metrics.get('latency_ms'):.0f}ms) — try nearby values around it."
+            f"{best.metrics.get('latency_ms'):.0f}ms) — try untested {knob}="
+            f"{suggested} nearby."
         ),
     )
 
@@ -155,3 +172,41 @@ def _pct_change(old: Optional[float], new: Optional[float]) -> Optional[float]:
     if old in (None, 0) or new is None:
         return None
     return (new - old) / old
+
+
+def _next_higher_untried(value: Optional[float], tried_values: set[Optional[float]]) -> Optional[float]:
+    if value is None:
+        return None
+    suggested = value * 2
+    while suggested in tried_values:
+        suggested *= 2
+    return suggested
+
+
+def _next_lower_untried(value: Optional[float], tried_values: set[Optional[float]]) -> Optional[float]:
+    if value is None:
+        return None
+    suggested = value / 2
+    while suggested in tried_values and suggested > 0:
+        suggested /= 2
+    return suggested if suggested > 0 else None
+
+
+def _untried_between(
+    low: Optional[float],
+    high: Optional[float],
+    tried_values: set[Optional[float]],
+) -> Optional[float]:
+    if low is None or high is None or low == high:
+        return None
+    suggested = (low + high) / 2
+    return suggested if suggested not in tried_values else None
+
+
+def _nearest_untried(value: Optional[float], tried_values: set[Optional[float]]) -> Optional[float]:
+    if value is None:
+        return None
+    for candidate in (value / 2, value * 1.5, value * 2):
+        if candidate > 0 and candidate not in tried_values:
+            return candidate
+    return _next_higher_untried(value, tried_values)

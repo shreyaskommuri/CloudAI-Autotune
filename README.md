@@ -1,59 +1,125 @@
-# CloudAI Autotune: Closed-Loop Benchmark Optimization for LLM Infrastructure
+# CloudAI Autotune
 
-CloudAI Autotune is a closed-loop benchmarking agent that helps AI infra teams
-find better LLM serving configurations. It runs [NVIDIA CloudAI](https://github.com/NVIDIA/cloudai)
-scenarios, parses the results, tracks every experiment in SQLite, compares
-configs over time, and recommends the next config to try.
+CloudAI Autotune is a lightweight experiment manager for LLM serving
+benchmarks. It sits on top of [NVIDIA CloudAI](https://github.com/NVIDIA/cloudai):
+CloudAI runs the benchmark, while Autotune records what was tried, parses the
+result, stores the metrics, and recommends the next config value to test.
 
-It is **not** a benchmark engine — it's a control layer on top of CloudAI.
-It also does not replay storage traces, simulate POSIX/S3 workloads, or
-benchmark checkpoint I/O; it focuses on benchmark experiment management and LLM
-serving config optimization.
+It is designed for the common tuning loop:
 
+```text
+try a config -> measure throughput/latency -> compare history -> choose next config
 ```
+
+Example:
+
+```text
 Run 1: batch_size = 1   ->  120 tok/s,  90 ms latency
 Run 2: batch_size = 4   ->  330 tok/s, 160 ms latency
+Run 3: batch_size = 8   ->  430 tok/s, 260 ms latency
 
-Recommendation: try batch_size = 8 — throughput is still scaling
-faster than latency is degrading.
+Recommendation: try batch_size = 6 because 8 crossed the latency budget and 6
+has not been tested yet.
 ```
 
-## How it works
+## What Autotune Is
 
-1. **Config loader** (`autotune/config_mutator.py`) — loads CloudAI TOML
-   scenario configs and derives new ones by overriding dotted keys
-   (e.g. `serving.batch_size`).
-2. **Runner** (`autotune/runner.py`) — wraps the `cloudai` CLI to run (or
-   dry-run) a scenario, capturing stdout and any generated report under
-   `runs/<run_id>/`.
-3. **Parser** (`autotune/parser.py`) — normalizes CloudAI JSON reports or
-   plain-text logs into `latency_ms`, `throughput_tokens_per_sec`,
-   `runtime_sec`, and `failure_rate`.
-4. **Database** (`autotune/database.py`) — records every run (config,
-   status, metrics, report path) in SQLite.
-5. **Recommender** (`autotune/recommender.py`) — compares the
-   throughput/latency tradeoff across runs and suggests the next value to
-   try for a tunable knob.
-6. **Dashboard** (`dashboard/app.py`) — a Streamlit UI for browsing
-   experiments, charting metrics, and viewing recommendations.
+Autotune is:
 
-## Project layout
+- a CLI for running or ingesting CloudAI benchmark experiments
+- a parser for JSON, JSONL, and text benchmark outputs
+- a SQLite experiment database
+- a simple recommender for the next knob value to try
+- a Streamlit dashboard for browsing experiment history
 
+Autotune is not:
+
+- a benchmark engine by itself
+- a replacement for CloudAI
+- a full multi-variable optimizer yet
+- a storage trace, POSIX/S3, or checkpoint I/O benchmark tool
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[CloudAI TOML config] --> B[autotune run]
+    B --> C[CloudAI CLI]
+    C --> D[runs/run_id/stdout.log]
+    C --> E[runs/run_id/report.json]
+
+    F[Existing report JSON/JSONL/log] --> G[autotune ingest]
+
+    D --> H[Parser]
+    E --> H
+    G --> H
+
+    H --> I[Normalized metrics]
+    I --> J[(autotune.db SQLite)]
+    A --> J
+
+    J --> K[autotune list]
+    J --> L[autotune recommend]
+    J --> M[Streamlit dashboard]
+
+    L --> N[Next untested knob value]
 ```
+
+The important boundary is that CloudAI owns benchmark execution. Autotune owns
+experiment tracking and recommendation.
+
+## Inputs and Outputs
+
+### Inputs
+
+| Input | Example | Used by |
+| --- | --- | --- |
+| CloudAI config | `configs/examples/vllm_baseline.toml` | `run`, `derive`, `ingest` |
+| Existing report | `reports/examples/vllm_batch4.json` | `ingest`, `demo` |
+| Tuning knob | `serving.batch_size` | `recommend`, `demo` |
+| Latency budget | `--latency-budget-ms 200` | `recommend`, `demo` |
+
+### Outputs
+
+| Output | Example | Contents |
+| --- | --- | --- |
+| Experiment DB | `autotune.db` | configs, status, metrics, report paths |
+| Run directory | `runs/0001_vllm_baseline_.../` | captured CloudAI artifacts |
+| Log file | `runs/.../stdout.log` | CloudAI output or failure details |
+| Recommendation | `Suggested: 6.0` | next untested knob value |
+| Dashboard | Streamlit app | tables, charts, recommendation view |
+
+## Metrics
+
+Reports are normalized into a small stable metric set:
+
+| Metric | Meaning |
+| --- | --- |
+| `latency_ms` | latency in milliseconds |
+| `throughput_tokens_per_sec` | generated token throughput |
+| `runtime_sec` | benchmark runtime |
+| `failure_rate` | failed request ratio |
+
+The parser accepts common aliases from different report formats. For example,
+`tokens_per_second`, `request_throughput`, and `output_throughput` can all map
+to `throughput_tokens_per_sec`.
+
+## Project Layout
+
+```text
 cloudai-autotune/
-  README.md
-  configs/examples/      # sample CloudAI scenario configs (vLLM, SGLang)
   autotune/
-    runner.py            # CloudAI CLI wrapper
+    cli.py               # command-line interface
+    config_mutator.py    # load and derive TOML configs
+    runner.py            # CloudAI subprocess wrapper
     parser.py            # report/log -> normalized metrics
     database.py          # SQLite experiment store
-    recommender.py       # next-config suggestion heuristic
-    config_mutator.py    # load / derive / write TOML configs
-    cli.py               # `autotune` command-line entry point
+    recommender.py       # next-value recommendation heuristic
+  configs/examples/      # sample CloudAI configs
+  reports/examples/      # sample benchmark reports
   dashboard/app.py       # Streamlit dashboard
-  runs/                  # captured run artifacts (stdout, reports)
-  reports/               # exported/aggregated reports
-  tests/
+  runs/                  # captured run artifacts
+  tests/                 # unit tests
 ```
 
 ## Setup
@@ -64,70 +130,127 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-This installs the `autotune` CLI and the Streamlit dashboard dependencies.
-CloudAI itself must be installed separately and available on `PATH` as
-`cloudai` (or pass `--cloudai-bin /path/to/cloudai`).
+Check the CLI:
 
-## Usage
+```bash
+autotune --help
+```
 
-Run a scenario and record the result:
+CloudAI is only required for real benchmark runs. The local demo works without
+CloudAI, GPUs, or cluster access.
+
+## Quick Demo Without CloudAI
+
+The fastest way to see the project work is:
+
+```bash
+autotune demo
+```
+
+This command:
+
+1. loads bundled sample reports from `reports/examples/`
+2. writes them to `autotune-demo.db`
+3. recommends a next value for `serving.batch_size`
+
+Useful options:
+
+```bash
+autotune demo --db /tmp/my-demo.db
+autotune demo --scenario vllm_baseline
+autotune demo --knob serving.batch_size --latency-budget-ms 200
+```
+
+## Run a Real CloudAI Scenario
+
+When CloudAI is installed and available as `cloudai`:
 
 ```bash
 autotune run configs/examples/vllm_baseline.toml
 ```
 
-Derive a new config by overriding a knob:
+Autotune will:
+
+1. create a database row with `status=running`
+2. call `cloudai run --config ... --output ...`
+3. capture stdout/stderr under `runs/<run_id>/stdout.log`
+4. parse the report or log
+5. mark the experiment `completed` or `failed`
+
+Use a custom CloudAI binary if needed:
+
+```bash
+autotune run configs/examples/vllm_baseline.toml --cloudai-bin /path/to/cloudai
+```
+
+## Ingest Existing Reports
+
+If a benchmark report already exists, record it without launching CloudAI:
+
+```bash
+autotune ingest reports/examples/vllm_batch4.json \
+  --config configs/examples/vllm_batch4.toml
+```
+
+## Derive a New Config
+
+Create a new config by overriding dotted TOML keys:
 
 ```bash
 autotune derive configs/examples/vllm_baseline.toml configs/derived/batch8.toml \
   --set serving.batch_size=8
+```
+
+Then run it:
+
+```bash
 autotune run configs/derived/batch8.toml
 ```
 
-List recorded experiments:
+## List Experiments
 
 ```bash
 autotune list
 ```
 
-Get a recommendation for the next value to try:
+Filter by scenario:
+
+```bash
+autotune list --scenario vllm_baseline
+```
+
+## Get a Recommendation
 
 ```bash
 autotune recommend --knob serving.batch_size --latency-budget-ms 200
 ```
 
-Launch the dashboard:
+The recommender compares completed experiments for one knob. It tries to avoid
+suggesting a value that was already tested. If `4` was good and `8` crossed the
+latency budget, it may suggest `6` as the next untested point.
+
+## Dashboard
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-## Demo without CloudAI
-
-You can try the experiment tracking and recommendation loop without a CloudAI
-installation or GPU cluster by ingesting the sample reports:
-
-```bash
-autotune ingest reports/examples/vllm_batch1.json \
-  --config configs/examples/vllm_baseline.toml
-autotune ingest reports/examples/vllm_batch4.json \
-  --config configs/examples/vllm_batch4.toml
-autotune ingest reports/examples/vllm_batch8.json \
-  --config configs/examples/vllm_batch8.toml
-autotune ingest reports/examples/sglang_bench.jsonl \
-  --config configs/examples/sglang_baseline.toml
-
-autotune list
-autotune recommend --knob serving.batch_size --latency-budget-ms 200
-```
-
-The recommender is an MVP heuristic: it compares the throughput gain against
-latency growth for a single tunable knob, then suggests the next value to try
-or a better observed tradeoff within the latency budget.
+The dashboard reads the local SQLite database and shows experiment history,
+metric charts, and the current recommendation.
 
 ## Development
 
+Run tests:
+
 ```bash
-pip install -e .
-pytest
+.venv/bin/python -m pytest -q
 ```
+
+Current test coverage includes:
+
+- config derivation
+- report parsing
+- runner failure handling
+- SQLite persistence
+- CLI ingest/demo behavior
+- recommendation logic

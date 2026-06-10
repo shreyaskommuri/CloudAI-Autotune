@@ -14,6 +14,13 @@ from autotune.parser import parse_report
 from autotune.recommender import DEFAULT_KNOB, recommend_next
 from autotune.runner import CloudAIRunner
 
+DEMO_REPORTS = (
+    ("configs/examples/vllm_baseline.toml", "reports/examples/vllm_batch1.json"),
+    ("configs/examples/vllm_batch4.toml", "reports/examples/vllm_batch4.json"),
+    ("configs/examples/vllm_batch8.toml", "reports/examples/vllm_batch8.json"),
+    ("configs/examples/sglang_baseline.toml", "reports/examples/sglang_bench.jsonl"),
+)
+
 
 @click.group()
 def cli() -> None:
@@ -83,6 +90,34 @@ def list_experiments(db_path: str, scenario: Optional[str]) -> None:
 @click.option("--db", "db_path", default="autotune.db", help="Path to the experiment database.")
 def ingest(report_path: Path, config_path: Path, db_path: str) -> None:
     """Record an existing CloudAI report without launching CloudAI."""
+    experiment_id, metrics = _ingest_report(report_path, config_path, db_path)
+
+    click.echo(f"[{experiment_id}] ingested {report_path} — {metrics}")
+
+
+@cli.command()
+@click.option("--db", "db_path", default="autotune-demo.db", help="Path to the demo database.")
+@click.option("--scenario", default="vllm_baseline", help="Scenario to use for the demo recommendation.")
+@click.option("--knob", default=DEFAULT_KNOB, help="Dotted config key to tune, e.g. serving.batch_size.")
+@click.option("--latency-budget-ms", type=float, default=200.0, help="Maximum acceptable latency in ms.")
+def demo(db_path: str, scenario: str, knob: str, latency_budget_ms: float) -> None:
+    """Load bundled sample reports and print a recommendation."""
+    for config_path, report_path in DEMO_REPORTS:
+        experiment_id, metrics = _ingest_report(Path(report_path), Path(config_path), db_path)
+        click.echo(f"[{experiment_id}] demo ingested {report_path} — {metrics}")
+
+    with ExperimentDB(db_path) as db:
+        experiments = db.list_experiments(scenario=scenario)
+        rec = recommend_next(experiments, knob=knob, latency_budget_ms=latency_budget_ms)
+
+    click.echo(f"Demo database: {db_path}")
+    click.echo(f"Scenario: {scenario}")
+    click.echo(f"Knob: {rec.knob}")
+    click.echo(f"Current: {rec.current_value}  ->  Suggested: {rec.suggested_value}")
+    click.echo(f"Reason: {rec.reason}")
+
+
+def _ingest_report(report_path: Path, config_path: Path, db_path: str) -> tuple[int, dict[str, object]]:
     config = config_mutator.load_config(config_path)
     scenario = config.get("scenario", {})
     metrics = parse_report(report_path)
@@ -102,7 +137,7 @@ def ingest(report_path: Path, config_path: Path, db_path: str) -> None:
             metrics=metrics,
         )
 
-    click.echo(f"[{experiment_id}] ingested {report_path} — {metrics}")
+    return experiment_id, metrics
 
 
 @cli.command()

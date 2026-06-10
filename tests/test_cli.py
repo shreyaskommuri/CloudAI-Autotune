@@ -38,7 +38,8 @@ def test_ingest_records_existing_report_and_recommendation(tmp_path):
         ],
     )
     assert recommended.exit_code == 0
-    assert "Suggested: 4.0" in recommended.output
+    assert "Suggested: 6.0" in recommended.output
+    assert "untested" in recommended.output
 
 
 def test_ingest_accepts_cloudai_sglang_jsonl_report(tmp_path):
@@ -60,3 +61,18 @@ def test_ingest_accepts_cloudai_sglang_jsonl_report(tmp_path):
     assert result.exit_code == 0
     assert "throughput_tokens_per_sec': 42.5" in result.output
     assert "failure_rate': 0.030000" in result.output
+
+
+def test_demo_loads_sample_reports_and_prints_recommendation(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "autotune-demo.db"
+
+    result = runner.invoke(cli, ["demo", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert result.output.count("demo ingested") == 4
+    assert f"Demo database: {db_path}" in result.output
+    assert "Scenario: vllm_baseline" in result.output
+    assert "Knob: serving.batch_size" in result.output
+    assert "Suggested: 6.0" in result.output
+    assert db_path.exists()

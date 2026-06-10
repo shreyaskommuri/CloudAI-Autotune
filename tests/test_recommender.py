@@ -51,9 +51,11 @@ def test_recommend_backs_off_when_latency_grows_faster():
 
     rec = recommend_next(experiments)
 
-    # throughput grew ~+6%, latency grew +150% -> recommend best tradeoff (batch_size=4)
-    assert rec.suggested_value == 4
+    # throughput grew ~+6%, latency grew +150% -> try an untested value
+    # near the best observed tradeoff instead of repeating batch_size=4.
+    assert rec.suggested_value == 6
     assert "growing faster" in rec.reason
+    assert "untested" in rec.reason
 
 
 def test_recommend_respects_latency_budget():
@@ -64,5 +66,19 @@ def test_recommend_respects_latency_budget():
 
     rec = recommend_next(experiments, latency_budget_ms=200)
 
-    assert rec.suggested_value == 4
+    assert rec.suggested_value == 6
     assert "budget" in rec.reason
+    assert "untested" in rec.reason
+
+
+def test_recommend_skips_already_tried_growth_candidate():
+    experiments = [
+        _exp(1, batch_size=1, throughput=120, latency=90),
+        _exp(2, batch_size=2, throughput=230, latency=120),
+        _exp(3, batch_size=4, throughput=430, latency=160),
+    ]
+
+    rec = recommend_next(experiments)
+
+    assert rec.suggested_value == 8
+    assert rec.suggested_value not in {1, 2, 4}
