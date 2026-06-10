@@ -47,3 +47,27 @@ def test_run_succeeds_with_a_real_command(tmp_path):
     assert result.succeeded
     assert result.returncode == 0
     assert result.stdout_path.exists()
+
+
+def test_command_string_uses_current_cloudai_cli_when_system_config_is_set(tmp_path):
+    runner = CloudAIRunner(
+        cloudai_bin="cloudai",
+        runs_dir=tmp_path,
+        dry_run=True,
+        system_config=tmp_path / "system.toml",
+        tests_dir=tmp_path / "tests",
+    )
+
+    command = runner.command_string(tmp_path / "scenario.toml", tmp_path / "run" / "report.json")
+
+    assert command == (
+        "cloudai dry-run "
+        "--test-scenario "
+        f"{tmp_path / 'scenario.toml'} "
+        "--system-config "
+        f"{tmp_path / 'system.toml'} "
+        "--output-dir "
+        f"{tmp_path / 'run'} "
+        "--tests-dir "
+        f"{tmp_path / 'tests'}"
+    )

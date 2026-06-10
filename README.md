@@ -166,7 +166,9 @@ autotune demo --knob serving.batch_size --latency-budget-ms 200
 When CloudAI is installed and available as `cloudai`:
 
 ```bash
-autotune run configs/examples/vllm_baseline.toml
+autotune run path/to/test_scenario.toml \
+  --system-config path/to/system.toml \
+  --tests-dir path/to/tests
 ```
 
 Autotune will:
@@ -180,7 +182,21 @@ Autotune will:
 Use a custom CloudAI binary if needed:
 
 ```bash
-autotune run configs/examples/vllm_baseline.toml --cloudai-bin /path/to/cloudai
+autotune run path/to/test_scenario.toml \
+  --cloudai-bin /path/to/cloudai \
+  --system-config path/to/system.toml \
+  --tests-dir path/to/tests
+```
+
+Use CloudAI dry-run mode to validate config wiring without launching a real
+benchmark:
+
+```bash
+autotune run path/to/test_scenario.toml \
+  --cloudai-bin /path/to/cloudai \
+  --dry-run \
+  --system-config path/to/system.toml \
+  --tests-dir path/to/tests
 ```
 
 ## Ingest Existing Reports

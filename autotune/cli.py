@@ -32,22 +32,38 @@ def cli() -> None:
 @click.option("--db", "db_path", default="autotune.db", help="Path to the experiment database.")
 @click.option("--dry-run", is_flag=True, help="Pass --dry-run through to CloudAI without executing.")
 @click.option("--cloudai-bin", default="cloudai", help="Name/path of the CloudAI CLI binary.")
-def run(config_path: Path, db_path: str, dry_run: bool, cloudai_bin: str) -> None:
+@click.option("--system-config", type=click.Path(exists=True, path_type=Path), default=None)
+@click.option("--tests-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
+def run(
+    config_path: Path,
+    db_path: str,
+    dry_run: bool,
+    cloudai_bin: str,
+    system_config: Optional[Path],
+    tests_dir: Optional[Path],
+) -> None:
     """Run a CloudAI scenario, parse its report, and record the experiment."""
     config = config_mutator.load_config(config_path)
     scenario = config.get("scenario", {})
+    scenario_name = scenario.get("name") if isinstance(scenario, dict) else None
+    backend = scenario.get("backend") if isinstance(scenario, dict) else None
 
     with ExperimentDB(db_path) as db:
         experiment_id = db.add_experiment(
-            scenario=scenario.get("name", config_path.stem),
-            backend=scenario.get("backend", "unknown"),
+            scenario=scenario_name or config.get("name", config_path.stem),
+            backend=backend or "unknown",
             config_path=str(config_path),
             config=config,
             status="running",
         )
 
         run_id = f"{experiment_id:04d}_{config_path.stem}_{int(time.time())}"
-        runner = CloudAIRunner(cloudai_bin=cloudai_bin, dry_run=dry_run)
+        runner = CloudAIRunner(
+            cloudai_bin=cloudai_bin,
+            dry_run=dry_run,
+            system_config=system_config,
+            tests_dir=tests_dir,
+        )
         result = runner.run(config_path, run_id)
 
         if not result.succeeded:
@@ -120,12 +136,14 @@ def demo(db_path: str, scenario: str, knob: str, latency_budget_ms: float) -> No
 def _ingest_report(report_path: Path, config_path: Path, db_path: str) -> tuple[int, dict[str, object]]:
     config = config_mutator.load_config(config_path)
     scenario = config.get("scenario", {})
+    scenario_name = scenario.get("name") if isinstance(scenario, dict) else None
+    backend = scenario.get("backend") if isinstance(scenario, dict) else None
     metrics = parse_report(report_path)
 
     with ExperimentDB(db_path) as db:
         experiment_id = db.add_experiment(
-            scenario=scenario.get("name", config_path.stem),
-            backend=scenario.get("backend", "unknown"),
+            scenario=scenario_name or config.get("name", config_path.stem),
+            backend=backend or "unknown",
             config_path=str(config_path),
             config=config,
             status="completed",
