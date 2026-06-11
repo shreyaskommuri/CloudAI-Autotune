@@ -22,6 +22,25 @@ def test_recommend_with_no_experiments():
     assert "No completed experiments" in rec.reason
 
 
+def test_recommend_ignores_completed_runs_without_usable_metrics():
+    experiments = [
+        _exp(1, batch_size=1, throughput=None, latency=None),
+        _exp(2, batch_size=2, throughput=230, latency=120),
+    ]
+
+    rec = recommend_next(experiments)
+
+    assert rec.current_value == 2
+    assert rec.suggested_value == 4
+
+
+def test_recommend_handles_only_unusable_metrics_without_crashing():
+    rec = recommend_next([_exp(1, batch_size=1, throughput=None, latency=None)])
+
+    assert rec.suggested_value is None
+    assert "usable throughput and latency metrics" in rec.reason
+
+
 def test_recommend_doubles_after_single_run():
     rec = recommend_next([_exp(1, batch_size=1, throughput=120, latency=90)])
 
@@ -56,6 +75,31 @@ def test_recommend_backs_off_when_latency_grows_faster():
     assert rec.suggested_value == 6
     assert "growing faster" in rec.reason
     assert "untested" in rec.reason
+
+
+def test_recommend_handles_zero_baseline_percentage_change():
+    experiments = [
+        _exp(1, batch_size=1, throughput=0, latency=0),
+        _exp(2, batch_size=2, throughput=120, latency=90),
+    ]
+
+    rec = recommend_next(experiments)
+
+    assert rec.current_value == 2
+    assert rec.suggested_value == 3
+    assert "undefined" in rec.reason
+
+
+def test_recommend_accepts_numeric_metric_strings():
+    experiments = [
+        _exp(1, batch_size=1, throughput="120", latency="90"),
+        _exp(2, batch_size=2, throughput="260", latency="120"),
+    ]
+
+    rec = recommend_next(experiments)
+
+    assert rec.current_value == 2
+    assert rec.suggested_value == 4
 
 
 def test_recommend_respects_latency_budget():

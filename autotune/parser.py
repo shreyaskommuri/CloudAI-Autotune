@@ -82,8 +82,7 @@ def _try_parse_json(text: str) -> Optional[Any]:
 
 
 def _try_parse_jsonl(text: str) -> Optional[Any]:
-    best: Optional[Any] = None
-    best_score = 0
+    rows: list[Any] = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -91,15 +90,30 @@ def _try_parse_jsonl(text: str) -> Optional[Any]:
         parsed = _try_parse_json(line)
         if parsed is None:
             continue
-        extracted = _extract_from_json(parsed)
+        rows.append(parsed)
+    return _best_metric_row(rows)
+
+
+def _extract_from_json(data: Any) -> dict[str, Optional[float]]:
+    if isinstance(data, list):
+        best = _best_metric_row(data)
+        return _extract_from_json(best) if best is not None else {}
+    return _extract_from_json_object(data)
+
+
+def _best_metric_row(rows: list[Any]) -> Optional[Any]:
+    best: Optional[Any] = None
+    best_score = 0
+    for row in rows:
+        extracted = _extract_from_json_object(row)
         score = sum(value is not None for value in extracted.values())
         if score >= best_score:
-            best = parsed
+            best = row
             best_score = score
     return best if best_score > 0 else None
 
 
-def _extract_from_json(data: Any) -> dict[str, Optional[float]]:
+def _extract_from_json_object(data: Any) -> dict[str, Optional[float]]:
     flat = _flatten(data)
     result: dict[str, Optional[float]] = {}
     for norm_key, aliases in _JSON_ALIASES.items():

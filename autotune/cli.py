@@ -163,14 +163,47 @@ def _ingest_report(report_path: Path, config_path: Path, db_path: str) -> tuple[
 @click.option("--scenario", default=None, help="Restrict recommendation to one scenario's history.")
 @click.option("--knob", default=DEFAULT_KNOB, help="Dotted config key to tune, e.g. serving.batch_size.")
 @click.option("--latency-budget-ms", type=float, default=None, help="Maximum acceptable latency in ms.")
-def recommend(db_path: str, scenario: Optional[str], knob: str, latency_budget_ms: Optional[float]) -> None:
+@click.option(
+    "--derive-from",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Base config to copy when writing the suggested config.",
+)
+@click.option(
+    "--out-config",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write a derived config with the suggested knob value.",
+)
+def recommend(
+    db_path: str,
+    scenario: Optional[str],
+    knob: str,
+    latency_budget_ms: Optional[float],
+    derive_from: Optional[Path],
+    out_config: Optional[Path],
+) -> None:
     """Recommend the next config value to try based on experiment history."""
+    if (derive_from is None) != (out_config is None):
+        raise click.UsageError("--derive-from and --out-config must be provided together.")
+
     with ExperimentDB(db_path) as db:
         experiments = db.list_experiments(scenario=scenario)
         rec = recommend_next(experiments, knob=knob, latency_budget_ms=latency_budget_ms)
         click.echo(f"Knob: {rec.knob}")
         click.echo(f"Current: {rec.current_value}  ->  Suggested: {rec.suggested_value}")
         click.echo(f"Reason: {rec.reason}")
+
+    if derive_from is not None and out_config is not None:
+        if rec.suggested_value is None:
+            click.echo("No suggested value available; derived config not written.")
+            return
+        written = config_mutator.derive_config(
+            derive_from,
+            {knob: rec.suggested_value},
+            out_config,
+        )
+        click.echo(f"Wrote suggested config to {written}")
 
 
 @cli.command()

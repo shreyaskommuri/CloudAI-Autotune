@@ -245,6 +245,20 @@ The recommender compares completed experiments for one knob. It tries to avoid
 suggesting a value that was already tested. If `4` was good and `8` crossed the
 latency budget, it may suggest `6` as the next untested point.
 
+To write that suggestion directly into a new config, pass a base config and an
+output path:
+
+```bash
+autotune recommend \
+  --knob serving.batch_size \
+  --latency-budget-ms 200 \
+  --derive-from configs/examples/vllm_baseline.toml \
+  --out-config configs/derived/batch6.toml
+```
+
+This prints the recommendation and writes `configs/derived/batch6.toml` with
+the suggested `serving.batch_size` value.
+
 ## Dashboard
 
 ```bash
@@ -270,3 +284,26 @@ Current test coverage includes:
 - SQLite persistence
 - CLI ingest/demo behavior
 - recommendation logic
+
+## Roadmap
+
+Goal: make Autotune the small, reliable companion for CloudAI performance
+tuning — easy enough for a first benchmark, useful enough for repeated
+production-readiness checks.
+
+- Make the first-run path obvious: one command for demo, one command for an
+  existing CloudAI report, and one command for a real CloudAI run.
+- Support a stable CloudAI machine-readable summary artifact when CloudAI
+  provides one, while keeping workload-specific parsers as fallbacks.
+- Improve recommendations from single-knob heuristics to multi-knob tuning for
+  batch size, concurrency, output tokens, and backend settings.
+- Track experiment intent, environment, hardware, and config diffs so results
+  are explainable later.
+- Add clearer pass/fail budgets for latency, throughput, error rate, and time
+  to first token.
+- Make the dashboard useful for comparison: best run, latest run, regressions,
+  and suggested next config.
+- Add export commands for CSV/JSON summaries that can be shared in issues,
+  pull requests, and benchmark reports.
+- Keep the tool local-first: SQLite by default, no service required, and clean
+  failure messages when CloudAI or benchmark artifacts are missing.

@@ -39,11 +39,18 @@ def _knob_value(exp: Experiment, knob: str) -> Optional[float]:
 
 def _efficiency(exp: Experiment) -> Optional[float]:
     """tokens/sec per ms of latency — higher is a better throughput/latency tradeoff."""
-    throughput = exp.metrics.get("throughput_tokens_per_sec")
-    latency = exp.metrics.get("latency_ms")
+    throughput = _metric_value(exp, "throughput_tokens_per_sec")
+    latency = _metric_value(exp, "latency_ms")
     if throughput is None or latency in (None, 0):
         return None
     return throughput / latency
+
+
+def _metric_value(exp: Experiment, key: str) -> Optional[float]:
+    try:
+        return float(exp.metrics[key])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def recommend_next(
@@ -59,26 +66,33 @@ def recommend_next(
     completed = [
         e
         for e in experiments
-        if e.status == "completed" and _knob_value(e, knob) is not None and e.metrics
+        if e.status == "completed"
+        and _knob_value(e, knob) is not None
+        and _metric_value(e, "throughput_tokens_per_sec") is not None
+        and _metric_value(e, "latency_ms") is not None
     ]
     if not completed:
         return Recommendation(
             knob=knob,
             current_value=None,
             suggested_value=None,
-            reason="No completed experiments with metrics yet — run a baseline first.",
+            reason="No completed experiments with usable throughput and latency metrics yet — run a baseline first.",
         )
 
     completed.sort(key=lambda e: _knob_value(e, knob))
     tried_values = {_knob_value(e, knob) for e in completed}
     latest = completed[-1]
     latest_value = _knob_value(latest, knob)
-    latest_throughput = latest.metrics.get("throughput_tokens_per_sec")
-    latest_latency = latest.metrics.get("latency_ms")
+    latest_throughput = _metric_value(latest, "throughput_tokens_per_sec")
+    latest_latency = _metric_value(latest, "latency_ms")
 
     if latency_budget_ms is not None and (latest_latency or 0) > latency_budget_ms:
         # Latest run blew the latency budget — recommend the best prior tradeoff.
-        candidates = [e for e in completed if (e.metrics.get("latency_ms") or 0) <= latency_budget_ms]
+        candidates = [
+            e
+            for e in completed
+            if (_metric_value(e, "latency_ms") or 0) <= latency_budget_ms
+        ]
         if candidates:
             best = max(candidates, key=lambda e: _efficiency(e) or 0)
             best_value = _knob_value(best, knob)
@@ -95,8 +109,8 @@ def recommend_next(
                     f"{knob}={latest_value} pushed latency to {latest_latency:.0f}ms, "
                     f"over the {latency_budget_ms:.0f}ms budget. Best observed tradeoff "
                     f"within budget was {knob}={best_value} "
-                    f"({best.metrics.get('throughput_tokens_per_sec'):.0f} tok/s @ "
-                    f"{best.metrics.get('latency_ms'):.0f}ms). Try untested {knob}="
+                    f"({_metric_value(best, 'throughput_tokens_per_sec'):.0f} tok/s @ "
+                    f"{_metric_value(best, 'latency_ms'):.0f}ms). Try untested {knob}="
                     f"{suggested} near that safer region."
                 ),
             )
@@ -127,8 +141,8 @@ def recommend_next(
         )
 
     prev = completed[-2]
-    prev_throughput = prev.metrics.get("throughput_tokens_per_sec")
-    prev_latency = prev.metrics.get("latency_ms")
+    prev_throughput = _metric_value(prev, "throughput_tokens_per_sec")
+    prev_latency = _metric_value(prev, "latency_ms")
 
     throughput_gain = _pct_change(prev_throughput, latest_throughput)
     latency_gain = _pct_change(prev_latency, latest_latency)
@@ -153,6 +167,20 @@ def recommend_next(
         best_value,
         tried_values,
     )
+    if throughput_gain is None or latency_gain is None:
+        return Recommendation(
+            knob=knob,
+            current_value=latest_value,
+            suggested_value=suggested,
+            reason=(
+                "Recent percentage change is undefined because the previous "
+                "throughput or latency baseline was zero. "
+                f"Best observed tradeoff so far is {knob}={best_value} "
+                f"({_metric_value(best, 'throughput_tokens_per_sec'):.0f} tok/s @ "
+                f"{_metric_value(best, 'latency_ms'):.0f}ms) — try untested {knob}="
+                f"{suggested} nearby."
+            ),
+        )
     return Recommendation(
         knob=knob,
         current_value=latest_value,
@@ -161,8 +189,8 @@ def recommend_next(
             f"Latency is now growing faster than throughput "
             f"({latency_gain:+.0%} vs {throughput_gain:+.0%}). "
             f"Best tradeoff so far is {knob}={best_value} "
-            f"({best.metrics.get('throughput_tokens_per_sec'):.0f} tok/s @ "
-            f"{best.metrics.get('latency_ms'):.0f}ms) — try untested {knob}="
+            f"({_metric_value(best, 'throughput_tokens_per_sec'):.0f} tok/s @ "
+            f"{_metric_value(best, 'latency_ms'):.0f}ms) — try untested {knob}="
             f"{suggested} nearby."
         ),
     )
