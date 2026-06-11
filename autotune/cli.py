@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import time
 from pathlib import Path
 from typing import Optional
@@ -9,7 +12,7 @@ from typing import Optional
 import click
 
 from autotune import config_mutator
-from autotune.database import ExperimentDB
+from autotune.database import Experiment, ExperimentDB
 from autotune.parser import parse_report
 from autotune.recommender import DEFAULT_KNOB, recommend_next
 from autotune.runner import CloudAIRunner
@@ -98,6 +101,88 @@ def list_experiments(db_path: str, scenario: Optional[str]) -> None:
                 f"[{exp.id}] {exp.scenario} ({exp.backend}) status={exp.status} "
                 f"metrics={exp.metrics}"
             )
+
+
+@cli.command()
+@click.option("--db", "db_path", default="autotune.db")
+@click.option("--scenario", default=None, help="Restrict export to one scenario.")
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(("csv", "json")),
+    default="csv",
+    show_default=True,
+    help="Export format.",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write export to a file.",
+)
+def export(
+    db_path: str,
+    scenario: Optional[str],
+    export_format: str,
+    out_path: Optional[Path],
+) -> None:
+    """Export experiment history as CSV or JSON."""
+    with ExperimentDB(db_path) as db:
+        rows = [_experiment_row(exp) for exp in db.list_experiments(scenario=scenario)]
+
+    if export_format == "json":
+        output = json.dumps(rows, indent=2) + "\n"
+    else:
+        output = _rows_to_csv(rows)
+
+    if out_path is None:
+        click.echo(output, nl=False)
+        return
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(output)
+    click.echo(f"Exported {len(rows)} experiments to {out_path}")
+
+
+def _experiment_row(exp: Experiment) -> dict[str, object]:
+    row: dict[str, object] = {
+        "id": exp.id,
+        "created_at": exp.created_at,
+        "scenario": exp.scenario,
+        "backend": exp.backend,
+        "status": exp.status,
+        "config_path": exp.config_path,
+        "report_path": exp.report_path,
+        "notes": exp.notes,
+    }
+    for key, value in exp.metrics.items():
+        row[f"metric.{key}"] = value
+    return row
+
+
+def _rows_to_csv(rows: list[dict[str, object]]) -> str:
+    fieldnames = _export_fieldnames(rows)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue()
+
+
+def _export_fieldnames(rows: list[dict[str, object]]) -> list[str]:
+    base = [
+        "id",
+        "created_at",
+        "scenario",
+        "backend",
+        "status",
+        "config_path",
+        "report_path",
+        "notes",
+    ]
+    metric_keys = sorted({key for row in rows for key in row if key.startswith("metric.")})
+    return base + metric_keys
 
 
 @cli.command()

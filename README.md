@@ -235,6 +235,18 @@ Filter by scenario:
 autotune list --scenario vllm_baseline
 ```
 
+## Export Results
+
+Write experiment summaries to CSV or JSON for sharing in issues, pull requests,
+or benchmark notes:
+
+```bash
+autotune export --format csv --out reports/summary.csv
+autotune export --format json --scenario vllm_baseline --out reports/vllm.json
+```
+
+Without `--out`, the export prints to the terminal.
+
 ## Get a Recommendation
 
 ```bash
@@ -303,7 +315,7 @@ production-readiness checks.
   to first token.
 - Make the dashboard useful for comparison: best run, latest run, regressions,
   and suggested next config.
-- Add export commands for CSV/JSON summaries that can be shared in issues,
-  pull requests, and benchmark reports.
+- Expand export templates for issue, pull request, and benchmark-report
+  summaries.
 - Keep the tool local-first: SQLite by default, no service required, and clean
   failure messages when CloudAI or benchmark artifacts are missing.

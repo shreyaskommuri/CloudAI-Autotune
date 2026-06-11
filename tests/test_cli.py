@@ -99,6 +99,65 @@ def test_recommend_requires_config_write_options_together(tmp_path):
     assert "--derive-from and --out-config must be provided together" in result.output
 
 
+def test_export_writes_csv_to_stdout(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    ingest = runner.invoke(
+        cli,
+        [
+            "ingest",
+            "reports/examples/vllm_batch4.json",
+            "--config",
+            "configs/examples/vllm_batch4.toml",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    result = runner.invoke(cli, ["export", "--db", str(db_path)])
+
+    assert ingest.exit_code == 0
+    assert result.exit_code == 0
+    assert "scenario,backend,status" in result.output
+    assert "vllm_baseline" in result.output
+    assert "metric.throughput_tokens_per_sec" in result.output
+    assert "330.0" in result.output
+
+
+def test_export_writes_json_file_with_scenario_filter(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    out_path = tmp_path / "exports" / "vllm.json"
+    for config_path, report_path in [
+        ("configs/examples/vllm_batch4.toml", "reports/examples/vllm_batch4.json"),
+        ("configs/examples/sglang_baseline.toml", "reports/examples/sglang_bench.jsonl"),
+    ]:
+        runner.invoke(
+            cli,
+            ["ingest", report_path, "--config", config_path, "--db", str(db_path)],
+        )
+
+    result = runner.invoke(
+        cli,
+        [
+            "export",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "vllm_baseline",
+            "--format",
+            "json",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"Exported 1 experiments to {out_path}" in result.output
+    assert '"scenario": "vllm_baseline"' in out_path.read_text()
+    assert "sglang_baseline" not in out_path.read_text()
+
+
 def test_ingest_accepts_cloudai_sglang_jsonl_report(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "sglang.db"
