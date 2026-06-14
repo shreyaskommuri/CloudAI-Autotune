@@ -14,8 +14,17 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from autotune.comparison import compare_best_and_latest
 from autotune.database import DEFAULT_DB_PATH, ExperimentDB
 from autotune.recommender import DEFAULT_KNOB, recommend_next
+
+
+def _format_number(value: object, suffix: str = "") -> str | None:
+    try:
+        return f"{float(value):g}{suffix}"
+    except (TypeError, ValueError):
+        return None
+
 
 st.set_page_config(page_title="CloudAI Autotune", layout="wide")
 st.title("CloudAI Autotune")
@@ -40,6 +49,7 @@ if not experiments:
 scenarios = sorted({e.scenario for e in experiments})
 selected_scenario = st.selectbox("Scenario", options=["All"] + scenarios)
 filtered = experiments if selected_scenario == "All" else [e for e in experiments if e.scenario == selected_scenario]
+budget = latency_budget if latency_budget > 0 else None
 
 rows = []
 for exp in filtered:
@@ -60,6 +70,7 @@ for exp in filtered:
             knob: knob_value,
             "throughput_tokens_per_sec": exp.metrics.get("throughput_tokens_per_sec"),
             "latency_ms": exp.metrics.get("latency_ms"),
+            "ttft_ms": exp.metrics.get("ttft_ms"),
             "runtime_sec": exp.metrics.get("runtime_sec"),
             "failure_rate": exp.metrics.get("failure_rate"),
             "created_at": exp.created_at,
@@ -70,6 +81,46 @@ df = pd.DataFrame(rows)
 
 st.subheader("Experiments")
 st.dataframe(df, use_container_width=True, hide_index=True)
+
+comparison = compare_best_and_latest(filtered, latency_budget_ms=budget)
+st.subheader("Comparison")
+col1, col2, col3 = st.columns(3)
+with col1:
+    best_value = (
+        comparison.best.metrics.get("throughput_tokens_per_sec")
+        if comparison.best is not None
+        else None
+    )
+    st.metric(
+        label="Best throughput run",
+        value=f"#{comparison.best.id}" if comparison.best is not None else "n/a",
+        delta=_format_number(best_value, " tok/s"),
+    )
+with col2:
+    latest_value = (
+        comparison.latest.metrics.get("throughput_tokens_per_sec")
+        if comparison.latest is not None
+        else None
+    )
+    st.metric(
+        label="Latest completed run",
+        value=f"#{comparison.latest.id}" if comparison.latest is not None else "n/a",
+        delta=_format_number(latest_value, " tok/s"),
+    )
+with col3:
+    st.metric(
+        label="Latest vs. best",
+        value=(
+            f"{comparison.throughput_delta_pct:+.1f}%"
+            if comparison.throughput_delta_pct is not None
+            else "n/a"
+        ),
+        delta=(
+            f"{comparison.latency_delta_ms:+.1f} ms latency"
+            if comparison.latency_delta_ms is not None
+            else None
+        ),
+    )
 
 completed = df[df["status"] == "completed"].dropna(subset=[knob, "throughput_tokens_per_sec", "latency_ms"])
 if not completed.empty:
@@ -83,7 +134,6 @@ if not completed.empty:
         st.line_chart(completed.set_index(knob)["latency_ms"])
 
 st.subheader("Recommendation")
-budget = latency_budget if latency_budget > 0 else None
 scenario_filter = None if selected_scenario == "All" else selected_scenario
 with ExperimentDB(db_path) as db:
     rec = recommend_next(db.list_experiments(scenario=scenario_filter), knob=knob, latency_budget_ms=budget)

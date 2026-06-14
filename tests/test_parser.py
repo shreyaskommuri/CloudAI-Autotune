@@ -49,6 +49,7 @@ def test_parse_cloudai_sglang_jsonl_report(tmp_path):
 
     assert metrics["throughput_tokens_per_sec"] == 42.5
     assert metrics["latency_ms"] == 18.2
+    assert metrics["ttft_ms"] == 18.2
     assert metrics["failure_rate"] == pytest.approx(0.03)
 
 
@@ -67,6 +68,7 @@ def test_parse_jsonl_uses_summary_line_when_earlier_lines_are_events(tmp_path):
 
     assert metrics["throughput_tokens_per_sec"] == 42.5
     assert metrics["latency_ms"] == 18.2
+    assert metrics["ttft_ms"] == 18.2
     assert metrics["failure_rate"] == pytest.approx(0.03)
 
 
@@ -85,6 +87,7 @@ def test_parse_json_array_uses_summary_object_when_earlier_objects_are_events(tm
 
     assert metrics["throughput_tokens_per_sec"] == 42.5
     assert metrics["latency_ms"] == 18.2
+    assert metrics["ttft_ms"] == 18.2
     assert metrics["failure_rate"] == pytest.approx(0.03)
 
 
@@ -93,6 +96,7 @@ def test_parse_text_log_via_regex(tmp_path):
         "Starting benchmark...\n"
         "Throughput: 330.5 tokens/sec\n"
         "Latency: 160.2 ms\n"
+        "TTFT: 24.5 ms\n"
         "Runtime: 42 sec\n"
         "Failure rate: 0.01\n"
     )
@@ -103,6 +107,7 @@ def test_parse_text_log_via_regex(tmp_path):
 
     assert metrics["throughput_tokens_per_sec"] == 330.5
     assert metrics["latency_ms"] == 160.2
+    assert metrics["ttft_ms"] == 24.5
     assert metrics["runtime_sec"] == 42.0
     assert metrics["failure_rate"] == 0.01
 
@@ -118,4 +123,5 @@ def test_parse_missing_metrics_are_none(tmp_path):
         "throughput_tokens_per_sec": None,
         "runtime_sec": None,
         "failure_rate": None,
+        "ttft_ms": None,
     }

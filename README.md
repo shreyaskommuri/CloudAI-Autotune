@@ -96,6 +96,7 @@ Reports are normalized into a small stable metric set:
 | Metric | Meaning |
 | --- | --- |
 | `latency_ms` | latency in milliseconds |
+| `ttft_ms` | time to first token in milliseconds |
 | `throughput_tokens_per_sec` | generated token throughput |
 | `runtime_sec` | benchmark runtime |
 | `failure_rate` | failed request ratio |
@@ -111,6 +112,7 @@ After recording runs, check them against simple performance budgets:
 ```bash
 autotune check \
   --latency-budget-ms 200 \
+  --ttft-budget-ms 50 \
   --min-throughput-tokens-per-sec 300 \
   --max-failure-rate 0.05
 ```
@@ -181,6 +183,9 @@ When CloudAI is installed and available as `cloudai`:
 
 ```bash
 autotune run path/to/test_scenario.toml \
+  --notes "baseline before tensor-parallel change" \
+  --metadata hardware.gpu=A100 \
+  --metadata run.nodes=1 \
   --system-config path/to/system.toml \
   --tests-dir path/to/tests
 ```
@@ -190,7 +195,8 @@ Autotune will:
 1. create a database row with `status=running`
 2. call `cloudai run --config ... --output ...`
 3. capture stdout/stderr under `runs/<run_id>/stdout.log`
-4. parse the report or log
+4. parse `report.json` or a common summary artifact such as `summary.json`,
+   `results.json`, `metrics.json`, or JSONL equivalents
 5. mark the experiment `completed` or `failed`
 
 Use a custom CloudAI binary if needed:
@@ -219,7 +225,19 @@ If a benchmark report already exists, record it without launching CloudAI:
 
 ```bash
 autotune ingest reports/examples/vllm_batch4.json \
-  --config configs/examples/vllm_batch4.toml
+  --config configs/examples/vllm_batch4.toml \
+  --notes "baseline batch size 4" \
+  --metadata hardware.gpu=A100
+```
+
+For a first pass when you only have a report artifact, provide the scenario,
+backend, and any config values you want Autotune to track:
+
+```bash
+autotune ingest reports/examples/vllm_batch4.json \
+  --scenario vllm_baseline \
+  --backend vllm \
+  --set serving.batch_size=4
 ```
 
 ## Derive a New Config
@@ -249,14 +267,23 @@ Filter by scenario:
 autotune list --scenario vllm_baseline
 ```
 
+## Compare Experiments
+
+Show config and metric differences between two recorded runs:
+
+```bash
+autotune diff 1 2
+```
+
 ## Export Results
 
-Write experiment summaries to CSV or JSON for sharing in issues, pull requests,
-or benchmark notes:
+Write experiment summaries to CSV, JSON, or Markdown for sharing in issues,
+pull requests, or benchmark notes:
 
 ```bash
 autotune export --format csv --out reports/summary.csv
 autotune export --format json --scenario vllm_baseline --out reports/vllm.json
+autotune export --format markdown --out reports/summary.md
 ```
 
 Without `--out`, the export prints to the terminal.
@@ -292,7 +319,7 @@ streamlit run dashboard/app.py
 ```
 
 The dashboard reads the local SQLite database and shows experiment history,
-metric charts, and the current recommendation.
+best/latest run comparison, metric charts, and the current recommendation.
 
 ## Development
 

@@ -12,8 +12,9 @@ from typing import Optional
 import click
 
 from autotune import config_mutator
-from autotune.budgets import Budgets, evaluate_experiment
+from autotune.budgets import BudgetCheck, Budgets, evaluate_experiment
 from autotune.database import Experiment, ExperimentDB
+from autotune.diffing import FieldDiff, diff_experiments
 from autotune.parser import parse_report
 from autotune.recommender import DEFAULT_KNOB, recommend_next
 from autotune.runner import CloudAIRunner
@@ -38,6 +39,13 @@ def cli() -> None:
 @click.option("--cloudai-bin", default="cloudai", help="Name/path of the CloudAI CLI binary.")
 @click.option("--system-config", type=click.Path(exists=True, path_type=Path), default=None)
 @click.option("--tests-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
+@click.option("--notes", default=None, help="Intent or context to store with this experiment.")
+@click.option(
+    "--metadata",
+    "metadata_items",
+    multiple=True,
+    help="Experiment metadata as key=value, e.g. --metadata hardware.gpu=A100.",
+)
 def run(
     config_path: Path,
     db_path: str,
@@ -45,9 +53,12 @@ def run(
     cloudai_bin: str,
     system_config: Optional[Path],
     tests_dir: Optional[Path],
+    notes: Optional[str],
+    metadata_items: tuple[str, ...],
 ) -> None:
     """Run a CloudAI scenario, parse its report, and record the experiment."""
     config = config_mutator.load_config(config_path)
+    metadata = _parse_metadata(metadata_items)
     scenario = config.get("scenario", {})
     scenario_name = scenario.get("name") if isinstance(scenario, dict) else None
     backend = scenario.get("backend") if isinstance(scenario, dict) else None
@@ -59,6 +70,7 @@ def run(
             config_path=str(config_path),
             config=config,
             status="running",
+            metadata=metadata,
         )
 
         run_id = f"{experiment_id:04d}_{config_path.stem}_{int(time.time())}"
@@ -71,7 +83,7 @@ def run(
         result = runner.run(config_path, run_id)
 
         if not result.succeeded:
-            db.update_result(experiment_id, status="failed", report_path=str(result.stdout_path))
+            db.update_result(experiment_id, status="failed", report_path=str(result.stdout_path), notes=notes)
             click.echo(f"[{experiment_id}] CloudAI exited with code {result.returncode}. See {result.stdout_path}")
             return
 
@@ -82,6 +94,7 @@ def run(
             status="completed",
             report_path=str(report_source),
             metrics=metrics,
+            notes=notes,
         )
 
         click.echo(f"[{experiment_id}] completed — {metrics}")
@@ -98,10 +111,38 @@ def list_experiments(db_path: str, scenario: Optional[str]) -> None:
             click.echo("No experiments recorded yet.")
             return
         for exp in experiments:
-            click.echo(
+            line = (
                 f"[{exp.id}] {exp.scenario} ({exp.backend}) status={exp.status} "
                 f"metrics={exp.metrics}"
             )
+            if exp.notes:
+                line += f" notes={exp.notes}"
+            if exp.metadata:
+                line += f" metadata={exp.metadata}"
+            click.echo(line)
+
+
+@cli.command(name="diff")
+@click.argument("left_id", type=int)
+@click.argument("right_id", type=int)
+@click.option("--db", "db_path", default="autotune.db")
+def diff_experiment(db_path: str, left_id: int, right_id: int) -> None:
+    """Compare config and metric differences between two experiments."""
+    with ExperimentDB(db_path) as db:
+        left = db.get(left_id)
+        right = db.get(right_id)
+
+    if left is None:
+        raise click.ClickException(f"Experiment {left_id} not found.")
+    if right is None:
+        raise click.ClickException(f"Experiment {right_id} not found.")
+
+    diff = diff_experiments(left, right)
+    click.echo(f"Comparing [{left.id}] {left.scenario} -> [{right.id}] {right.scenario}")
+    click.echo("Config:")
+    _echo_diffs(diff.config)
+    click.echo("Metrics:")
+    _echo_diffs(diff.metrics)
 
 
 @cli.command()
@@ -110,7 +151,7 @@ def list_experiments(db_path: str, scenario: Optional[str]) -> None:
 @click.option(
     "--format",
     "export_format",
-    type=click.Choice(("csv", "json")),
+    type=click.Choice(("csv", "json", "markdown")),
     default="csv",
     show_default=True,
     help="Export format.",
@@ -134,6 +175,8 @@ def export(
 
     if export_format == "json":
         output = json.dumps(rows, indent=2) + "\n"
+    elif export_format == "markdown":
+        output = _rows_to_markdown(rows)
     else:
         output = _rows_to_csv(rows)
 
@@ -162,6 +205,12 @@ def export(
     help="Minimum acceptable generated-token throughput.",
 )
 @click.option(
+    "--ttft-budget-ms",
+    type=float,
+    default=None,
+    help="Maximum acceptable time to first token in ms.",
+)
+@click.option(
     "--runtime-budget-sec",
     type=float,
     default=None,
@@ -183,6 +232,7 @@ def check(
     scenario: Optional[str],
     latency_budget_ms: Optional[float],
     min_throughput_tokens_per_sec: Optional[float],
+    ttft_budget_ms: Optional[float],
     runtime_budget_sec: Optional[float],
     max_failure_rate: Optional[float],
     strict: bool,
@@ -190,6 +240,7 @@ def check(
     """Check recorded experiments against metric budgets."""
     budgets = Budgets(
         latency_ms=latency_budget_ms,
+        ttft_ms=ttft_budget_ms,
         min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
         runtime_sec=runtime_budget_sec,
         failure_rate=max_failure_rate,
@@ -207,9 +258,34 @@ def check(
     for exp, check_result in zip(experiments, checks):
         reason = "; ".join(check_result.reasons)
         click.echo(f"[{exp.id}] {exp.scenario} status={check_result.status} - {reason}")
+    click.echo(_check_summary(checks))
 
     if strict and any(check_result.status != "pass" for check_result in checks):
         raise click.exceptions.Exit(1)
+
+
+def _check_summary(checks: list[BudgetCheck]) -> str:
+    counts = {"pass": 0, "fail": 0, "unknown": 0}
+    for check_result in checks:
+        status = check_result.status
+        counts[status if status in counts else "unknown"] += 1
+    total = sum(counts.values())
+    return (
+        f"Summary: {counts['pass']} pass, {counts['fail']} fail, "
+        f"{counts['unknown']} unknown ({total} total)"
+    )
+
+
+def _echo_diffs(diffs: tuple[FieldDiff, ...]) -> None:
+    if not diffs:
+        click.echo("  no differences")
+        return
+    for item in diffs:
+        click.echo(f"  {item.key}: {_format_diff_value(item.left)} -> {_format_diff_value(item.right)}")
+
+
+def _format_diff_value(value: object) -> str:
+    return "missing" if value is None else str(value)
 
 
 def _experiment_row(exp: Experiment) -> dict[str, object]:
@@ -225,6 +301,8 @@ def _experiment_row(exp: Experiment) -> dict[str, object]:
     }
     for key, value in exp.metrics.items():
         row[f"metric.{key}"] = value
+    for key, value in exp.metadata.items():
+        row[f"metadata.{key}"] = value
     return row
 
 
@@ -249,16 +327,67 @@ def _export_fieldnames(rows: list[dict[str, object]]) -> list[str]:
         "notes",
     ]
     metric_keys = sorted({key for row in rows for key in row if key.startswith("metric.")})
-    return base + metric_keys
+    metadata_keys = sorted({key for row in rows for key in row if key.startswith("metadata.")})
+    return base + metric_keys + metadata_keys
+
+
+def _rows_to_markdown(rows: list[dict[str, object]]) -> str:
+    fieldnames = _export_fieldnames(rows)
+    lines = [
+        "| " + " | ".join(fieldnames) + " |",
+        "| " + " | ".join("---" for _ in fieldnames) + " |",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(_markdown_cell(row.get(key)) for key in fieldnames) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def _markdown_cell(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("|", "\\|").replace("\n", " ")
 
 
 @cli.command()
 @click.argument("report_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--config", "config_path", required=True, type=click.Path(exists=True, path_type=Path))
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--scenario", default=None, help="Scenario name to use when --config is omitted.")
+@click.option("--backend", default=None, help="Backend name to use when --config is omitted.")
 @click.option("--db", "db_path", default="autotune.db", help="Path to the experiment database.")
-def ingest(report_path: Path, config_path: Path, db_path: str) -> None:
+@click.option("--notes", default=None, help="Intent or context to store with this experiment.")
+@click.option(
+    "--set",
+    "overrides",
+    multiple=True,
+    help="Config metadata as dotted key=value, e.g. --set serving.batch_size=4.",
+)
+@click.option(
+    "--metadata",
+    "metadata_items",
+    multiple=True,
+    help="Experiment metadata as key=value, e.g. --metadata hardware.gpu=A100.",
+)
+def ingest(
+    report_path: Path,
+    config_path: Optional[Path],
+    scenario: Optional[str],
+    backend: Optional[str],
+    db_path: str,
+    notes: Optional[str],
+    overrides: tuple[str, ...],
+    metadata_items: tuple[str, ...],
+) -> None:
     """Record an existing CloudAI report without launching CloudAI."""
-    experiment_id, metrics = _ingest_report(report_path, config_path, db_path)
+    experiment_id, metrics = _ingest_report(
+        report_path,
+        config_path,
+        db_path,
+        notes=notes,
+        scenario=scenario,
+        backend=backend,
+        overrides=_parse_assignments(overrides, param_hint="--set"),
+        metadata=_parse_metadata(metadata_items),
+    )
 
     click.echo(f"[{experiment_id}] ingested {report_path} — {metrics}")
 
@@ -285,8 +414,19 @@ def demo(db_path: str, scenario: str, knob: str, latency_budget_ms: float) -> No
     click.echo(f"Reason: {rec.reason}")
 
 
-def _ingest_report(report_path: Path, config_path: Path, db_path: str) -> tuple[int, dict[str, object]]:
-    config = config_mutator.load_config(config_path)
+def _ingest_report(
+    report_path: Path,
+    config_path: Optional[Path],
+    db_path: str,
+    notes: Optional[str] = None,
+    scenario: Optional[str] = None,
+    backend: Optional[str] = None,
+    overrides: Optional[dict[str, object]] = None,
+    metadata: Optional[dict[str, object]] = None,
+) -> tuple[int, dict[str, object]]:
+    config = _ingest_config(report_path, config_path, scenario=scenario, backend=backend)
+    for key, value in (overrides or {}).items():
+        config = config_mutator.set_value(config, key, value)
     scenario = config.get("scenario", {})
     scenario_name = scenario.get("name") if isinstance(scenario, dict) else None
     backend = scenario.get("backend") if isinstance(scenario, dict) else None
@@ -294,20 +434,38 @@ def _ingest_report(report_path: Path, config_path: Path, db_path: str) -> tuple[
 
     with ExperimentDB(db_path) as db:
         experiment_id = db.add_experiment(
-            scenario=scenario_name or config.get("name", config_path.stem),
+            scenario=scenario_name or config.get("name", report_path.stem),
             backend=backend or "unknown",
-            config_path=str(config_path),
+            config_path=str(config_path or report_path),
             config=config,
             status="completed",
+            metadata=metadata,
         )
         db.update_result(
             experiment_id,
             status="completed",
             report_path=str(report_path),
             metrics=metrics,
+            notes=notes,
         )
 
     return experiment_id, metrics
+
+
+def _ingest_config(
+    report_path: Path,
+    config_path: Optional[Path],
+    scenario: Optional[str],
+    backend: Optional[str],
+) -> dict[str, object]:
+    if config_path is not None:
+        return config_mutator.load_config(config_path)
+    return {
+        "scenario": {
+            "name": scenario or report_path.stem,
+            "backend": backend or "unknown",
+        }
+    }
 
 
 @cli.command()
@@ -389,6 +547,23 @@ def _coerce(value: str) -> object:
     if value.lower() in ("true", "false"):
         return value.lower() == "true"
     return value
+
+
+def _parse_metadata(items: tuple[str, ...]) -> dict[str, object]:
+    return _parse_assignments(items, param_hint="--metadata")
+
+
+def _parse_assignments(items: tuple[str, ...], param_hint: str) -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    for item in items:
+        if "=" not in item:
+            raise click.BadParameter(f"Expected key=value, got: {item}", param_hint=param_hint)
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise click.BadParameter("Key cannot be empty.", param_hint=param_hint)
+        metadata[key] = _coerce(raw_value.strip())
+    return metadata
 
 
 if __name__ == "__main__":

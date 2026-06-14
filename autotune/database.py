@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS experiments (
     status TEXT NOT NULL DEFAULT 'pending',
     report_path TEXT,
     metrics_json TEXT,
-    notes TEXT
+    notes TEXT,
+    metadata_json TEXT
 );
 """
 
@@ -38,6 +39,7 @@ class Experiment:
     report_path: Optional[str] = None
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Experiment":
@@ -52,6 +54,7 @@ class Experiment:
             report_path=row["report_path"],
             metrics=json.loads(row["metrics_json"]) if row["metrics_json"] else {},
             notes=row["notes"],
+            metadata=json.loads(row["metadata_json"]) if row["metadata_json"] else {},
         )
 
 
@@ -63,6 +66,7 @@ class ExperimentDB:
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(SCHEMA)
+        self._ensure_columns()
         self._conn.commit()
 
     def close(self) -> None:
@@ -81,16 +85,32 @@ class ExperimentDB:
         config_path: str,
         config: dict[str, Any],
         status: str = "pending",
+        metadata: Optional[dict[str, Any]] = None,
     ) -> int:
         cur = self._conn.execute(
             """
-            INSERT INTO experiments (scenario, backend, config_path, config_json, status)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO experiments (scenario, backend, config_path, config_json, status, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (scenario, backend, config_path, json.dumps(config), status),
+            (
+                scenario,
+                backend,
+                config_path,
+                json.dumps(config),
+                status,
+                json.dumps(metadata or {}),
+            ),
         )
         self._conn.commit()
         return cur.lastrowid
+
+    def _ensure_columns(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(experiments)").fetchall()
+        }
+        if "metadata_json" not in columns:
+            self._conn.execute("ALTER TABLE experiments ADD COLUMN metadata_json TEXT")
 
     def update_result(
         self,
