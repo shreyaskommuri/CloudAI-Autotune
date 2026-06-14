@@ -104,6 +104,20 @@ The parser accepts common aliases from different report formats. For example,
 `tokens_per_second`, `request_throughput`, and `output_throughput` can all map
 to `throughput_tokens_per_sec`.
 
+## Check Pass/Fail Budgets
+
+After recording runs, check them against simple performance budgets:
+
+```bash
+autotune check \
+  --latency-budget-ms 200 \
+  --min-throughput-tokens-per-sec 300 \
+  --max-failure-rate 0.05
+```
+
+Use `--strict` in scripts or CI to exit non-zero if any experiment fails a
+budget or cannot be evaluated because a required metric is missing.
+
 ## Project Layout
 
 ```text
@@ -311,8 +325,8 @@ production-readiness checks.
   batch size, concurrency, output tokens, and backend settings.
 - Track experiment intent, environment, hardware, and config diffs so results
   are explainable later.
-- Add clearer pass/fail budgets for latency, throughput, error rate, and time
-  to first token.
+- Expand pass/fail budgets to include time to first token and richer policy
+  reporting.
 - Make the dashboard useful for comparison: best run, latest run, regressions,
   and suggested next config.
 - Expand export templates for issue, pull request, and benchmark-report

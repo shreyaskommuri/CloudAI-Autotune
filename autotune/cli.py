@@ -12,6 +12,7 @@ from typing import Optional
 import click
 
 from autotune import config_mutator
+from autotune.budgets import Budgets, evaluate_experiment
 from autotune.database import Experiment, ExperimentDB
 from autotune.parser import parse_report
 from autotune.recommender import DEFAULT_KNOB, recommend_next
@@ -143,6 +144,72 @@ def export(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(output)
     click.echo(f"Exported {len(rows)} experiments to {out_path}")
+
+
+@cli.command()
+@click.option("--db", "db_path", default="autotune.db")
+@click.option("--scenario", default=None, help="Restrict checks to one scenario.")
+@click.option(
+    "--latency-budget-ms",
+    type=float,
+    default=None,
+    help="Maximum acceptable latency in ms.",
+)
+@click.option(
+    "--min-throughput-tokens-per-sec",
+    type=float,
+    default=None,
+    help="Minimum acceptable generated-token throughput.",
+)
+@click.option(
+    "--runtime-budget-sec",
+    type=float,
+    default=None,
+    help="Maximum acceptable runtime in seconds.",
+)
+@click.option(
+    "--max-failure-rate",
+    type=float,
+    default=None,
+    help="Maximum acceptable failed-request ratio.",
+)
+@click.option(
+    "--strict",
+    is_flag=True,
+    help="Exit non-zero when any experiment fails or cannot be evaluated.",
+)
+def check(
+    db_path: str,
+    scenario: Optional[str],
+    latency_budget_ms: Optional[float],
+    min_throughput_tokens_per_sec: Optional[float],
+    runtime_budget_sec: Optional[float],
+    max_failure_rate: Optional[float],
+    strict: bool,
+) -> None:
+    """Check recorded experiments against metric budgets."""
+    budgets = Budgets(
+        latency_ms=latency_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_sec=runtime_budget_sec,
+        failure_rate=max_failure_rate,
+    )
+    with ExperimentDB(db_path) as db:
+        experiments = db.list_experiments(scenario=scenario)
+
+    if not experiments:
+        click.echo("No experiments recorded yet.")
+        if strict:
+            raise click.exceptions.Exit(1)
+        return
+
+    checks = [evaluate_experiment(exp, budgets) for exp in experiments]
+    for exp, check_result in zip(experiments, checks):
+        reason = "; ".join(check_result.reasons)
+        click.echo(f"[{exp.id}] {exp.scenario} status={check_result.status} - {reason}")
+
+    if strict and any(check_result.status != "pass" for check_result in checks):
+        raise click.exceptions.Exit(1)
 
 
 def _experiment_row(exp: Experiment) -> dict[str, object]:

@@ -158,6 +158,69 @@ def test_export_writes_json_file_with_scenario_filter(tmp_path):
     assert "sglang_baseline" not in out_path.read_text()
 
 
+def test_check_reports_budget_pass_and_failure(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    for config_path, report_path in [
+        ("configs/examples/vllm_batch4.toml", "reports/examples/vllm_batch4.json"),
+        ("configs/examples/vllm_batch8.toml", "reports/examples/vllm_batch8.json"),
+    ]:
+        ingest = runner.invoke(
+            cli,
+            ["ingest", report_path, "--config", config_path, "--db", str(db_path)],
+        )
+        assert ingest.exit_code == 0
+
+    result = runner.invoke(
+        cli,
+        [
+            "check",
+            "--db",
+            str(db_path),
+            "--latency-budget-ms",
+            "200",
+            "--min-throughput-tokens-per-sec",
+            "300",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "[1] vllm_baseline status=pass" in result.output
+    assert "[2] vllm_baseline status=fail" in result.output
+    assert "latency 260ms exceeds budget 200ms" in result.output
+
+
+def test_check_strict_exits_nonzero_on_failure(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    runner.invoke(
+        cli,
+        [
+            "ingest",
+            "reports/examples/vllm_batch8.json",
+            "--config",
+            "configs/examples/vllm_batch8.toml",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    result = runner.invoke(
+        cli,
+        [
+            "check",
+            "--db",
+            str(db_path),
+            "--latency-budget-ms",
+            "200",
+            "--strict",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "status=fail" in result.output
+
+
 def test_ingest_accepts_cloudai_sglang_jsonl_report(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "sglang.db"
