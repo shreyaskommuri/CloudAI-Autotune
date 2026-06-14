@@ -9,7 +9,9 @@ def test_run_returns_failed_result_when_binary_is_missing(tmp_path):
     assert not result.succeeded
     assert result.returncode != 0
     assert result.stdout_path.exists()
-    assert "this-binary-does-not-exist" in result.stdout_path.read_text()
+    log = result.stdout_path.read_text()
+    assert "autotune: command: this-binary-does-not-exist run" in log
+    assert "this-binary-does-not-exist" in log
     assert result.report_path is None
 
 
@@ -47,6 +49,32 @@ def test_run_succeeds_with_a_real_command(tmp_path):
     assert result.succeeded
     assert result.returncode == 0
     assert result.stdout_path.exists()
+    assert "autotune: command: true run" in result.stdout_path.read_text()
+
+
+def test_run_detects_common_summary_report_names(tmp_path):
+    cloudai = tmp_path / "fake-cloudai"
+    cloudai.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
+        "    shift\n"
+        "    out=\"$1\"\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "dir=$(dirname \"$out\")\n"
+        "mkdir -p \"$dir\"\n"
+        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$dir/summary.json\"\n"
+    )
+    cloudai.chmod(0o755)
+    runner = CloudAIRunner(cloudai_bin=str(cloudai), runs_dir=tmp_path)
+
+    result = runner.run(tmp_path / "scenario.toml", run_id="0005_test")
+
+    assert result.succeeded
+    assert result.report_path == tmp_path / "0005_test" / "summary.json"
 
 
 def test_command_string_uses_current_cloudai_cli_when_system_config_is_set(tmp_path):

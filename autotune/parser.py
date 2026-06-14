@@ -4,7 +4,7 @@ CloudAI scenarios can emit either a structured JSON report or plain-text
 stdout/log output depending on the backend. This parser supports both,
 normalizing everything into the metric set Autotune tracks:
 
-    latency_ms, throughput_tokens_per_sec, runtime_sec, failure_rate
+    latency_ms, throughput_tokens_per_sec, runtime_sec, failure_rate, ttft_ms
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ METRIC_KEYS = (
     "throughput_tokens_per_sec",
     "runtime_sec",
     "failure_rate",
+    "ttft_ms",
 )
 
 # Aliases seen across CloudAI backend report formats, mapped to our normalized keys.
@@ -40,6 +41,13 @@ _JSON_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "runtime_sec": ("runtime_sec", "runtime", "duration_sec", "elapsed_sec"),
     "failure_rate": ("failure_rate", "error_rate", "failed_ratio"),
+    "ttft_ms": (
+        "ttft_ms",
+        "time_to_first_token_ms",
+        "time_to_first_token",
+        "mean_ttft_ms",
+        "p50_ttft_ms",
+    ),
 }
 
 # Regex fallbacks for free-text logs, e.g. "Throughput: 330.5 tokens/sec".
@@ -50,6 +58,10 @@ _TEXT_PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     "runtime_sec": re.compile(r"runtime[^0-9\-]*([\d.]+)\s*s(ec)?", re.IGNORECASE),
     "failure_rate": re.compile(r"failure[ _-]?rate[^0-9\-]*([\d.]+)", re.IGNORECASE),
+    "ttft_ms": re.compile(
+        r"(ttft|time[ -]?to[ -]?first[ -]?token)[^0-9\-]*([\d.]+)\s*ms",
+        re.IGNORECASE,
+    ),
 }
 
 
@@ -131,7 +143,7 @@ def _extract_from_text(text: str) -> dict[str, Optional[float]]:
     for norm_key, pattern in _TEXT_PATTERNS.items():
         match = pattern.search(text)
         if match:
-            result[norm_key] = _to_float(match.group(1))
+            result[norm_key] = _to_float(_first_numeric_group(match))
     return result
 
 
@@ -152,6 +164,13 @@ def _to_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_numeric_group(match: re.Match[str]) -> Optional[str]:
+    for group in match.groups():
+        if group is not None and _to_float(group) is not None:
+            return group
+    return None
 
 
 def _failure_rate_from_counts(flat: dict[str, Any]) -> Optional[float]:

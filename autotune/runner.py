@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_RUNS_DIR = Path("runs")
+REPORT_CANDIDATES = (
+    "summary.json",
+    "results.json",
+    "metrics.json",
+    "report.jsonl",
+    "summary.jsonl",
+)
 
 
 @dataclass
@@ -64,6 +71,7 @@ class CloudAIRunner:
 
         stdout_path = run_dir / "stdout.log"
         with open(stdout_path, "w") as stdout_file:
+            stdout_file.write(f"autotune: command: {' '.join(shlex.quote(part) for part in cmd)}\n")
             try:
                 proc = subprocess.run(
                     cmd,
@@ -84,7 +92,7 @@ class CloudAIRunner:
             run_dir=run_dir,
             returncode=returncode,
             stdout_path=stdout_path,
-            report_path=report_path if report_path.exists() else None,
+            report_path=_find_report(report_path),
         )
 
     def _build_command(self, config_path: Path, report_path: Path) -> list[str]:
@@ -111,3 +119,13 @@ class CloudAIRunner:
     def command_string(self, config_path: Path | str, report_path: Path | str) -> str:
         """Return the shell-quoted command Autotune would run, for logging/debugging."""
         return " ".join(shlex.quote(part) for part in self._build_command(Path(config_path), Path(report_path)))
+
+
+def _find_report(expected_path: Path) -> Optional[Path]:
+    if expected_path.exists():
+        return expected_path
+    for name in REPORT_CANDIDATES:
+        candidate = expected_path.parent / name
+        if candidate.exists():
+            return candidate
+    return None

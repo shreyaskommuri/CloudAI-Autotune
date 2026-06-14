@@ -11,6 +11,7 @@ from autotune.database import Experiment
 @dataclass(frozen=True)
 class Budgets:
     latency_ms: Optional[float] = None
+    ttft_ms: Optional[float] = None
     min_throughput_tokens_per_sec: Optional[float] = None
     runtime_sec: Optional[float] = None
     failure_rate: Optional[float] = None
@@ -20,6 +21,7 @@ class Budgets:
             value is not None
             for value in (
                 self.latency_ms,
+                self.ttft_ms,
                 self.min_throughput_tokens_per_sec,
                 self.runtime_sec,
                 self.failure_rate,
@@ -68,6 +70,15 @@ def evaluate_experiment(exp: Experiment, budgets: Budgets) -> BudgetCheck:
     )
     _check_max(
         exp,
+        metric="ttft_ms",
+        limit=budgets.ttft_ms,
+        label="ttft",
+        unit="ms",
+        failures=failures,
+        unknowns=unknowns,
+    )
+    _check_max(
+        exp,
         metric="runtime_sec",
         limit=budgets.runtime_sec,
         label="runtime",
@@ -86,7 +97,7 @@ def evaluate_experiment(exp: Experiment, budgets: Budgets) -> BudgetCheck:
     )
 
     if failures:
-        return BudgetCheck(exp.id, "fail", tuple(failures))
+        return BudgetCheck(exp.id, "fail", tuple(failures + unknowns))
     if unknowns:
         return BudgetCheck(exp.id, "unknown", tuple(unknowns))
     return BudgetCheck(exp.id, "pass", ("all provided budgets satisfied",))
