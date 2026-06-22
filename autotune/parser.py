@@ -29,7 +29,10 @@ _JSON_ALIASES: dict[str, tuple[str, ...]] = {
         "latency",
         "p50_latency_ms",
         "mean_latency_ms",
-        "mean_ttft_ms",
+        "e2e_latency_ms",
+        "mean_e2e_latency_ms",
+        "request_latency_ms",
+        "mean_request_latency_ms",
     ),
     "throughput_tokens_per_sec": (
         "throughput_tokens_per_sec",

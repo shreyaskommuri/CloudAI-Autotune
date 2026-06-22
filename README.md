@@ -195,8 +195,9 @@ Autotune will:
 1. create a database row with `status=running`
 2. call `cloudai run --config ... --output ...`
 3. capture stdout/stderr under `runs/<run_id>/stdout.log`
-4. parse `report.json` or a common summary artifact such as `summary.json`,
-   `results.json`, `metrics.json`, or JSONL equivalents
+4. parse `report.json` or a common summary artifact such as
+   `cloudai-summary.json`, `summary.json`, `results.json`, `metrics.json`,
+   or JSONL equivalents
 5. mark the experiment `completed` or `failed`
 
 Use a custom CloudAI binary if needed:
@@ -215,6 +216,16 @@ benchmark:
 autotune run path/to/test_scenario.toml \
   --cloudai-bin /path/to/cloudai \
   --dry-run \
+  --system-config path/to/system.toml \
+  --tests-dir path/to/tests
+```
+
+For a direct CloudAI CLI-contract smoke check without writing an experiment
+record:
+
+```bash
+autotune smoke-cloudai path/to/test_scenario.toml \
+  --cloudai-bin /path/to/cloudai \
   --system-config path/to/system.toml \
   --tests-dir path/to/tests
 ```
@@ -284,6 +295,8 @@ pull requests, or benchmark notes:
 autotune export --format csv --out reports/summary.csv
 autotune export --format json --scenario vllm_baseline --out reports/vllm.json
 autotune export --format markdown --out reports/summary.md
+autotune export --format markdown --template issue
+autotune export --format markdown --template pr
 ```
 
 Without `--out`, the export prints to the terminal.
@@ -294,9 +307,9 @@ Without `--out`, the export prints to the terminal.
 autotune recommend --knob serving.batch_size --latency-budget-ms 200
 ```
 
-The recommender compares completed experiments for one knob. It tries to avoid
-suggesting a value that was already tested. If `4` was good and `8` crossed the
-latency budget, it may suggest `6` as the next untested point.
+The recommender compares completed experiments for one or more knobs. It tries
+to avoid suggesting a value that was already tested. If `4` was good and `8`
+crossed the latency budget, it may suggest `6` as the next untested point.
 
 To write that suggestion directly into a new config, pass a base config and an
 output path:
@@ -304,13 +317,14 @@ output path:
 ```bash
 autotune recommend \
   --knob serving.batch_size \
+  --knob serving.num_requests \
   --latency-budget-ms 200 \
   --derive-from configs/examples/vllm_baseline.toml \
   --out-config configs/derived/batch6.toml
 ```
 
-This prints the recommendation and writes `configs/derived/batch6.toml` with
-the suggested `serving.batch_size` value.
+This prints one recommendation per knob and writes `configs/derived/batch6.toml`
+with the suggested values applied.
 
 ## Dashboard
 
@@ -348,8 +362,8 @@ production-readiness checks.
   existing CloudAI report, and one command for a real CloudAI run.
 - Support a stable CloudAI machine-readable summary artifact when CloudAI
   provides one, while keeping workload-specific parsers as fallbacks.
-- Improve recommendations from single-knob heuristics to multi-knob tuning for
-  batch size, concurrency, output tokens, and backend settings.
+- Continue improving multi-knob recommendations beyond independent knob
+  suggestions toward budget-aware search across interacting backend settings.
 - Track experiment intent, environment, hardware, and config diffs so results
   are explainable later.
 - Expand pass/fail budgets to include time to first token and richer policy

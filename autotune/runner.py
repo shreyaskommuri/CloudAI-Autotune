@@ -15,6 +15,7 @@ from typing import Optional
 
 DEFAULT_RUNS_DIR = Path("runs")
 REPORT_CANDIDATES = (
+    "cloudai-summary.json",
     "summary.json",
     "results.json",
     "metrics.json",
