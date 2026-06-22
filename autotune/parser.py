@@ -134,8 +134,10 @@ def _extract_from_json_object(data: Any) -> dict[str, Optional[float]]:
     for norm_key, aliases in _JSON_ALIASES.items():
         for alias in aliases:
             if alias in flat:
-                result[norm_key] = _to_float(flat[alias])
-                break
+                value = _to_float(flat[alias])
+                if value is not None:
+                    result[norm_key] = value
+                    break
     if "failure_rate" not in result:
         result["failure_rate"] = _failure_rate_from_counts(flat)
     return result

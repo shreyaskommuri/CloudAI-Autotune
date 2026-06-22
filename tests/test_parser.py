@@ -34,6 +34,22 @@ def test_parse_json_report_with_aliases_and_nesting(tmp_path):
     assert metrics["latency_ms"] == 90.0
 
 
+def test_parse_json_skips_non_numeric_aliases_before_valid_metrics(tmp_path):
+    report = {
+        "latency": {"unit": "ms"},
+        "mean_e2e_latency_ms": 210,
+        "throughput": {"unit": "tokens/sec"},
+        "output_throughput": 42.5,
+    }
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+
+    metrics = parse_report(path)
+
+    assert metrics["latency_ms"] == 210.0
+    assert metrics["throughput_tokens_per_sec"] == 42.5
+
+
 def test_parse_cloudai_sglang_jsonl_report(tmp_path):
     report = {
         "request_throughput": 42.5,
