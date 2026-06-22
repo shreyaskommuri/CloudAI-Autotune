@@ -17,7 +17,7 @@ from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
 from autotune.parser import parse_report
 from autotune.recommender import DEFAULT_KNOB, recommend_next
-from autotune.runner import CloudAIRunner
+from autotune.runner import CloudAIRunner, RunResult
 
 DEMO_REPORTS = (
     ("configs/examples/vllm_baseline.toml", "reports/examples/vllm_batch1.json"),
@@ -37,6 +37,12 @@ def cli() -> None:
 @click.option("--db", "db_path", default="autotune.db", help="Path to the experiment database.")
 @click.option("--dry-run", is_flag=True, help="Pass --dry-run through to CloudAI without executing.")
 @click.option("--cloudai-bin", default="cloudai", help="Name/path of the CloudAI CLI binary.")
+@click.option(
+    "--timeout-sec",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Fail and log the run if CloudAI exceeds this many seconds.",
+)
 @click.option("--system-config", type=click.Path(exists=True, path_type=Path), default=None)
 @click.option("--tests-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
 @click.option("--notes", default=None, help="Intent or context to store with this experiment.")
@@ -51,6 +57,7 @@ def run(
     db_path: str,
     dry_run: bool,
     cloudai_bin: str,
+    timeout_sec: Optional[float],
     system_config: Optional[Path],
     tests_dir: Optional[Path],
     notes: Optional[str],
@@ -79,16 +86,27 @@ def run(
             dry_run=dry_run,
             system_config=system_config,
             tests_dir=tests_dir,
+            timeout_sec=timeout_sec,
         )
         result = runner.run(config_path, run_id)
 
         if not result.succeeded:
             db.update_result(experiment_id, status="failed", report_path=str(result.stdout_path), notes=notes)
-            click.echo(f"[{experiment_id}] CloudAI exited with code {result.returncode}. See {result.stdout_path}")
-            return
+            reason = result.failure_reason or f"CloudAI failed with code {result.returncode}"
+            click.echo(f"[{experiment_id}] {reason}. See {result.stdout_path}")
+            raise click.exceptions.Exit(1)
 
         report_source = result.report_path or result.stdout_path
-        metrics = parse_report(report_source)
+        metrics, parse_error = _parse_cloudai_report(result, report_source)
+        if parse_error is not None:
+            db.update_result(
+                experiment_id,
+                status="failed",
+                report_path=str(result.stdout_path),
+                notes=notes,
+            )
+            click.echo(f"[{experiment_id}] {parse_error}. See {result.stdout_path}")
+            raise click.exceptions.Exit(1)
         db.update_result(
             experiment_id,
             status="completed",
@@ -610,11 +628,16 @@ def smoke_cloudai(
     result = runner.run(config_path, run_id)
     click.echo(f"Command log: {result.stdout_path}")
     if not result.succeeded:
-        click.echo(f"CloudAI smoke failed with code {result.returncode}.")
+        reason = result.failure_reason or f"CloudAI failed with code {result.returncode}"
+        click.echo(f"CloudAI smoke failed: {reason}.")
         raise click.exceptions.Exit(1)
     if result.report_path is not None:
         click.echo(f"Detected report: {result.report_path}")
-        click.echo(f"Parsed metrics: {parse_report(result.report_path)}")
+        metrics, parse_error = _parse_cloudai_report(result, result.report_path)
+        if parse_error is not None:
+            click.echo(f"CloudAI smoke failed: {parse_error}.")
+            raise click.exceptions.Exit(1)
+        click.echo(f"Parsed metrics: {metrics}")
     else:
         click.echo("CloudAI smoke passed; no machine-readable report was detected.")
 
@@ -667,6 +690,18 @@ def _parse_assignments(items: tuple[str, ...], param_hint: str) -> dict[str, obj
             raise click.BadParameter("Key cannot be empty.", param_hint=param_hint)
         metadata[key] = _coerce(raw_value.strip())
     return metadata
+
+
+def _parse_cloudai_report(
+    result: RunResult,
+    report_path: Path,
+) -> tuple[Optional[dict[str, Optional[float]]], Optional[str]]:
+    try:
+        return parse_report(report_path), None
+    except (OSError, UnicodeError) as exc:
+        reason = f"CloudAI report parsing failed: {exc}"
+        result.log_diagnostic(reason)
+        return None, reason
 
 
 if __name__ == "__main__":

@@ -32,10 +32,16 @@ class RunResult:
     returncode: int
     stdout_path: Path
     report_path: Optional[Path]
+    failure_reason: Optional[str] = None
 
     @property
     def succeeded(self) -> bool:
         return self.returncode == 0
+
+    def log_diagnostic(self, message: str) -> None:
+        """Append an Autotune diagnostic without overwriting CloudAI output."""
+        with open(self.stdout_path, "a") as stdout_file:
+            stdout_file.write(f"\nautotune: {message}\n")
 
 
 class CloudAIRunner:
@@ -48,7 +54,7 @@ class CloudAIRunner:
         dry_run: bool = False,
         system_config: Path | str | None = None,
         tests_dir: Path | str | None = None,
-        timeout_sec: Optional[int] = None,
+        timeout_sec: Optional[float] = None,
     ):
         self.cloudai_bin = cloudai_bin
         self.runs_dir = Path(runs_dir)
@@ -71,6 +77,7 @@ class CloudAIRunner:
         cmd = self._build_command(config_path, report_path)
 
         stdout_path = run_dir / "stdout.log"
+        failure_reason: Optional[str] = None
         with open(stdout_path, "w") as stdout_file:
             stdout_file.write(f"autotune: command: {' '.join(shlex.quote(part) for part in cmd)}\n")
             try:
@@ -81,10 +88,16 @@ class CloudAIRunner:
                     timeout=self.timeout_sec,
                 )
                 returncode = proc.returncode
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                # Treat launch and timeout failures as failed runs so the CLI can
-                # mark the experiment failed instead of leaving it "running".
-                stdout_file.write(f"autotune: failed to run {self.cloudai_bin!r}: {exc}\n")
+                if returncode != 0:
+                    failure_reason = f"CloudAI exited with code {returncode}"
+                    stdout_file.write(f"\nautotune: {failure_reason}\n")
+            except subprocess.TimeoutExpired:
+                failure_reason = f"CloudAI timed out after {self.timeout_sec} seconds"
+                stdout_file.write(f"\nautotune: {failure_reason}\n")
+                returncode = -1
+            except OSError as exc:
+                failure_reason = f"CloudAI launch failed: {exc}"
+                stdout_file.write(f"\nautotune: {failure_reason}\n")
                 returncode = -1
 
         return RunResult(
@@ -94,6 +107,7 @@ class CloudAIRunner:
             returncode=returncode,
             stdout_path=stdout_path,
             report_path=_find_report(report_path),
+            failure_reason=failure_reason,
         )
 
     def _build_command(self, config_path: Path, report_path: Path) -> list[str]:

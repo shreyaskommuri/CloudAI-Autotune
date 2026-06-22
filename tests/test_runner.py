@@ -12,17 +12,27 @@ def test_run_returns_failed_result_when_binary_is_missing(tmp_path):
     log = result.stdout_path.read_text()
     assert "autotune: command: this-binary-does-not-exist run" in log
     assert "this-binary-does-not-exist" in log
+    assert "autotune: CloudAI launch failed:" in log
+    assert result.failure_reason is not None
+    assert "launch failed" in result.failure_reason
     assert result.report_path is None
 
 
 def test_run_returns_failed_result_when_command_exits_nonzero(tmp_path):
-    runner = CloudAIRunner(cloudai_bin="false", runs_dir=tmp_path)
+    cloudai = tmp_path / "failing-cloudai"
+    cloudai.write_text("#!/bin/sh\necho 'backend exploded' >&2\nexit 7\n")
+    cloudai.chmod(0o755)
+    runner = CloudAIRunner(cloudai_bin=str(cloudai), runs_dir=tmp_path)
 
     result = runner.run(tmp_path / "scenario.toml", run_id="0002_test")
 
     assert not result.succeeded
-    assert result.returncode != 0
+    assert result.returncode == 7
     assert result.stdout_path.exists()
+    log = result.stdout_path.read_text()
+    assert "backend exploded" in log
+    assert "autotune: CloudAI exited with code 7" in log
+    assert result.failure_reason == "CloudAI exited with code 7"
     assert result.report_path is None
 
 
@@ -37,7 +47,9 @@ def test_run_returns_failed_result_when_command_times_out(tmp_path):
     assert not result.succeeded
     assert result.returncode != 0
     assert result.stdout_path.exists()
-    assert "timed out" in result.stdout_path.read_text()
+    log = result.stdout_path.read_text()
+    assert "autotune: CloudAI timed out after 0.01 seconds" in log
+    assert result.failure_reason == "CloudAI timed out after 0.01 seconds"
     assert result.report_path is None
 
 

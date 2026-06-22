@@ -200,11 +200,17 @@ Autotune will:
    or JSONL equivalents
 5. mark the experiment `completed` or `failed`
 
+CloudAI stdout and stderr are preserved in the run's `stdout.log`. Autotune
+also appends a diagnostic for launch failures, timeouts, non-zero exits, and
+unreadable report artifacts. Failed runs exit non-zero so shell scripts and CI
+do not mistake them for successful benchmarks.
+
 Use a custom CloudAI binary if needed:
 
 ```bash
 autotune run path/to/test_scenario.toml \
   --cloudai-bin /path/to/cloudai \
+  --timeout-sec 3600 \
   --system-config path/to/system.toml \
   --tests-dir path/to/tests
 ```
