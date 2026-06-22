@@ -77,6 +77,32 @@ def test_run_detects_common_summary_report_names(tmp_path):
     assert result.report_path == tmp_path / "0005_test" / "summary.json"
 
 
+def test_run_prefers_cloudai_summary_report(tmp_path):
+    script = tmp_path / "fake_cloudai.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
+        "    shift\n"
+        "    out=\"$1\"\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "dir=$(dirname \"$out\")\n"
+        "mkdir -p \"$dir\"\n"
+        "printf '{\"metrics\":{\"throughput_tokens_per_sec\": 123}}' > \"$dir/cloudai-summary.json\"\n"
+        "printf '{\"throughput_tokens_per_sec\": 1}' > \"$dir/summary.json\"\n"
+    )
+    script.chmod(0o755)
+    runner = CloudAIRunner(cloudai_bin=str(script), runs_dir=tmp_path)
+
+    result = runner.run(tmp_path / "config.toml", "0006_test")
+
+    assert result.succeeded
+    assert result.report_path == tmp_path / "0006_test" / "cloudai-summary.json"
+
+
 def test_command_string_uses_current_cloudai_cli_when_system_config_is_set(tmp_path):
     runner = CloudAIRunner(
         cloudai_bin="cloudai",

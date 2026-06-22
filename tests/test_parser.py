@@ -34,6 +34,22 @@ def test_parse_json_report_with_aliases_and_nesting(tmp_path):
     assert metrics["latency_ms"] == 90.0
 
 
+def test_parse_json_skips_non_numeric_aliases_before_valid_metrics(tmp_path):
+    report = {
+        "latency": {"unit": "ms"},
+        "mean_e2e_latency_ms": 210,
+        "throughput": {"unit": "tokens/sec"},
+        "output_throughput": 42.5,
+    }
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+
+    metrics = parse_report(path)
+
+    assert metrics["latency_ms"] == 210.0
+    assert metrics["throughput_tokens_per_sec"] == 42.5
+
+
 def test_parse_cloudai_sglang_jsonl_report(tmp_path):
     report = {
         "request_throughput": 42.5,
@@ -48,7 +64,7 @@ def test_parse_cloudai_sglang_jsonl_report(tmp_path):
     metrics = parse_report(path)
 
     assert metrics["throughput_tokens_per_sec"] == 42.5
-    assert metrics["latency_ms"] == 18.2
+    assert metrics["latency_ms"] is None
     assert metrics["ttft_ms"] == 18.2
     assert metrics["failure_rate"] == pytest.approx(0.03)
 
@@ -67,7 +83,7 @@ def test_parse_jsonl_uses_summary_line_when_earlier_lines_are_events(tmp_path):
     metrics = parse_report(path)
 
     assert metrics["throughput_tokens_per_sec"] == 42.5
-    assert metrics["latency_ms"] == 18.2
+    assert metrics["latency_ms"] is None
     assert metrics["ttft_ms"] == 18.2
     assert metrics["failure_rate"] == pytest.approx(0.03)
 
@@ -86,9 +102,25 @@ def test_parse_json_array_uses_summary_object_when_earlier_objects_are_events(tm
     metrics = parse_report(path)
 
     assert metrics["throughput_tokens_per_sec"] == 42.5
-    assert metrics["latency_ms"] == 18.2
+    assert metrics["latency_ms"] is None
     assert metrics["ttft_ms"] == 18.2
     assert metrics["failure_rate"] == pytest.approx(0.03)
+
+
+def test_parse_sglang_latency_alias_separates_latency_from_ttft(tmp_path):
+    report = {
+        "request_throughput": 42.5,
+        "mean_ttft_ms": 18.2,
+        "mean_e2e_latency_ms": 210.0,
+    }
+    path = tmp_path / "sglang-bench.jsonl"
+    path.write_text(json.dumps(report))
+
+    metrics = parse_report(path)
+
+    assert metrics["throughput_tokens_per_sec"] == 42.5
+    assert metrics["latency_ms"] == 210.0
+    assert metrics["ttft_ms"] == 18.2
 
 
 def test_parse_text_log_via_regex(tmp_path):

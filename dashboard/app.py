@@ -122,6 +122,19 @@ with col3:
         ),
     )
 
+if comparison.best is not None and comparison.latest is not None:
+    if comparison.best.id == comparison.latest.id:
+        st.success(f"Latest completed run #{comparison.latest.id} is also the best throughput run.")
+    else:
+        parts = [f"Latest completed run #{comparison.latest.id} differs from best run #{comparison.best.id}."]
+        if comparison.throughput_delta_pct is not None:
+            direction = "higher" if comparison.throughput_delta_pct > 0 else "lower"
+            parts.append(f"Throughput is {abs(comparison.throughput_delta_pct):.1f}% {direction}.")
+        if comparison.latency_delta_ms is not None:
+            direction = "higher" if comparison.latency_delta_ms > 0 else "lower"
+            parts.append(f"Latency is {abs(comparison.latency_delta_ms):.1f} ms {direction}.")
+        st.warning(" ".join(parts))
+
 completed = df[df["status"] == "completed"].dropna(subset=[knob, "throughput_tokens_per_sec", "latency_ms"])
 if not completed.empty:
     completed = completed.sort_values(knob)

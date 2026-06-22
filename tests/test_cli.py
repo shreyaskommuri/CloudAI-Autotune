@@ -125,6 +125,62 @@ def test_recommend_can_write_suggested_config(tmp_path):
     assert config_mutator.load_config(out_config)["serving"]["batch_size"] == 6.0
 
 
+def test_recommend_supports_multiple_knobs_and_writes_config(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    out_config = tmp_path / "multi.toml"
+
+    for batch_size, num_requests, report in [
+        (1, 100, "reports/examples/vllm_batch1.json"),
+        (4, 200, "reports/examples/vllm_batch4.json"),
+    ]:
+        result = runner.invoke(
+            cli,
+            [
+                "ingest",
+                report,
+                "--db",
+                str(db_path),
+                "--scenario",
+                "manual_vllm",
+                "--backend",
+                "vllm",
+                "--set",
+                f"serving.batch_size={batch_size}",
+                "--set",
+                f"serving.num_requests={num_requests}",
+            ],
+        )
+        assert result.exit_code == 0
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--derive-from",
+            "configs/examples/vllm_baseline.toml",
+            "--out-config",
+            str(out_config),
+        ],
+    )
+
+    written = config_mutator.load_config(out_config)
+    assert result.exit_code == 0
+    assert result.output.count("Knob: serving.") == 2
+    assert "Knob: serving.batch_size" in result.output
+    assert "Knob: serving.num_requests" in result.output
+    assert written["serving"]["batch_size"] == 8.0
+    assert written["serving"]["num_requests"] == 400.0
+
+
 def test_ingest_records_notes_for_experiment_context(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "demo.db"
@@ -334,6 +390,72 @@ def test_export_writes_markdown_to_stdout(tmp_path):
     assert "330.0" in result.output
 
 
+def test_export_writes_issue_markdown_template(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    ingest = runner.invoke(
+        cli,
+        [
+            "ingest",
+            "reports/examples/vllm_batch4.json",
+            "--config",
+            "configs/examples/vllm_batch4.toml",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    result = runner.invoke(
+        cli,
+        ["export", "--db", str(db_path), "--format", "markdown", "--template", "issue"],
+    )
+
+    assert ingest.exit_code == 0
+    assert result.exit_code == 0
+    assert "## Benchmark Result Summary" in result.output
+    assert "Recorded experiments: 1" in result.output
+    assert "autotune check" in result.output
+
+
+def test_export_writes_pr_markdown_template(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    ingest = runner.invoke(
+        cli,
+        [
+            "ingest",
+            "reports/examples/vllm_batch4.json",
+            "--config",
+            "configs/examples/vllm_batch4.toml",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    result = runner.invoke(
+        cli,
+        ["export", "--db", str(db_path), "--format", "markdown", "--template", "pr"],
+    )
+
+    assert ingest.exit_code == 0
+    assert result.exit_code == 0
+    assert "## Benchmark Evidence" in result.output
+    assert "### Validation" in result.output
+    assert "--template pr" in result.output
+
+
+def test_export_rejects_template_for_non_markdown(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["export", "--db", str(tmp_path / "demo.db"), "--format", "json", "--template", "issue"],
+    )
+
+    assert result.exit_code != 0
+    assert "--template can only be used with --format markdown" in result.output
+
+
 def test_check_reports_budget_pass_and_failure(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "demo.db"
@@ -493,3 +615,58 @@ def test_demo_loads_sample_reports_and_prints_recommendation(tmp_path):
     assert "Knob: serving.batch_size" in result.output
     assert "Suggested: 6.0" in result.output
     assert db_path.exists()
+
+
+def test_smoke_cloudai_reports_success_with_fake_cloudai(tmp_path):
+    runner = CliRunner()
+    cloudai = tmp_path / "fake-cloudai"
+    cloudai.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
+        "    shift\n"
+        "    out=\"$1\"\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "dir=$(dirname \"$out\")\n"
+        "mkdir -p \"$dir\"\n"
+        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$dir/cloudai-summary.json\"\n"
+    )
+    cloudai.chmod(0o755)
+
+    result = runner.invoke(
+        cli,
+        [
+            "smoke-cloudai",
+            "configs/examples/vllm_baseline.toml",
+            "--cloudai-bin",
+            str(cloudai),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Detected report:" in result.output
+    assert "Parsed metrics:" in result.output
+
+
+def test_smoke_cloudai_exits_nonzero_on_failure(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        [
+            "smoke-cloudai",
+            "configs/examples/vllm_baseline.toml",
+            "--cloudai-bin",
+            "false",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "CloudAI smoke failed" in result.output

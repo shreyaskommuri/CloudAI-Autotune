@@ -29,7 +29,10 @@ _JSON_ALIASES: dict[str, tuple[str, ...]] = {
         "latency",
         "p50_latency_ms",
         "mean_latency_ms",
-        "mean_ttft_ms",
+        "e2e_latency_ms",
+        "mean_e2e_latency_ms",
+        "request_latency_ms",
+        "mean_request_latency_ms",
     ),
     "throughput_tokens_per_sec": (
         "throughput_tokens_per_sec",
@@ -131,8 +134,10 @@ def _extract_from_json_object(data: Any) -> dict[str, Optional[float]]:
     for norm_key, aliases in _JSON_ALIASES.items():
         for alias in aliases:
             if alias in flat:
-                result[norm_key] = _to_float(flat[alias])
-                break
+                value = _to_float(flat[alias])
+                if value is not None:
+                    result[norm_key] = value
+                    break
     if "failure_rate" not in result:
         result["failure_rate"] = _failure_rate_from_counts(flat)
     return result

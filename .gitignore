@@ -5,6 +5,7 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+debug.log
 
 # personal scratch notes (gaps/observations for upstream contribution)
 notes/
