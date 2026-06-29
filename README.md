@@ -187,7 +187,8 @@ autotune run path/to/test_scenario.toml \
   --metadata hardware.gpu=A100 \
   --metadata run.nodes=1 \
   --system-config path/to/system.toml \
-  --tests-dir path/to/tests
+  --tests-dir path/to/tests \
+  --hook-dir path/to/hooks
 ```
 
 Autotune will:
@@ -212,7 +213,8 @@ autotune run path/to/test_scenario.toml \
   --cloudai-bin /path/to/cloudai \
   --timeout-sec 3600 \
   --system-config path/to/system.toml \
-  --tests-dir path/to/tests
+  --tests-dir path/to/tests \
+  --hook-dir path/to/hooks
 ```
 
 Use CloudAI dry-run mode to validate config wiring without launching a real
@@ -223,7 +225,8 @@ autotune run path/to/test_scenario.toml \
   --cloudai-bin /path/to/cloudai \
   --dry-run \
   --system-config path/to/system.toml \
-  --tests-dir path/to/tests
+  --tests-dir path/to/tests \
+  --hook-dir path/to/hooks
 ```
 
 For a direct CloudAI CLI-contract smoke check without writing an experiment
@@ -233,7 +236,8 @@ record:
 autotune smoke-cloudai path/to/test_scenario.toml \
   --cloudai-bin /path/to/cloudai \
   --system-config path/to/system.toml \
-  --tests-dir path/to/tests
+  --tests-dir path/to/tests \
+  --hook-dir path/to/hooks
 ```
 
 ## Ingest Existing Reports

@@ -54,6 +54,7 @@ class CloudAIRunner:
         dry_run: bool = False,
         system_config: Path | str | None = None,
         tests_dir: Path | str | None = None,
+        hook_dir: Path | str | None = None,
         timeout_sec: Optional[float] = None,
     ):
         self.cloudai_bin = cloudai_bin
@@ -61,6 +62,7 @@ class CloudAIRunner:
         self.dry_run = dry_run
         self.system_config = Path(system_config) if system_config is not None else None
         self.tests_dir = Path(tests_dir) if tests_dir is not None else None
+        self.hook_dir = Path(hook_dir) if hook_dir is not None else None
         self.timeout_sec = timeout_sec
 
     def run(self, config_path: Path | str, run_id: str) -> RunResult:
@@ -125,6 +127,8 @@ class CloudAIRunner:
             ]
             if self.tests_dir is not None:
                 cmd.extend(["--tests-dir", str(self.tests_dir)])
+            if self.hook_dir is not None:
+                cmd.extend(["--hook-dir", str(self.hook_dir)])
             return cmd
 
         cmd = [self.cloudai_bin, "run", "--config", str(config_path), "--output", str(report_path)]

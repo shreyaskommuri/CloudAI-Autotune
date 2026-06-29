@@ -632,11 +632,17 @@ def test_smoke_cloudai_reports_success_with_fake_cloudai(tmp_path):
         "  fi\n"
         "  shift\n"
         "done\n"
-        "dir=$(dirname \"$out\")\n"
-        "mkdir -p \"$dir\"\n"
-        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$dir/cloudai-summary.json\"\n"
+        "mkdir -p \"$out\"\n"
+        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$out/cloudai-summary.json\"\n"
     )
     cloudai.chmod(0o755)
+    system_config = tmp_path / "system.toml"
+    system_config.touch()
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    hook_dir = tmp_path / "hooks"
+    hook_dir.mkdir()
+    runs_dir = tmp_path / "runs"
 
     result = runner.invoke(
         cli,
@@ -645,14 +651,22 @@ def test_smoke_cloudai_reports_success_with_fake_cloudai(tmp_path):
             "configs/examples/vllm_baseline.toml",
             "--cloudai-bin",
             str(cloudai),
+            "--system-config",
+            str(system_config),
+            "--tests-dir",
+            str(tests_dir),
+            "--hook-dir",
+            str(hook_dir),
             "--runs-dir",
-            str(tmp_path / "runs"),
+            str(runs_dir),
         ],
     )
+    log_path = next(runs_dir.glob("*/stdout.log"))
 
     assert result.exit_code == 0
     assert "Detected report:" in result.output
     assert "Parsed metrics:" in result.output
+    assert f"--hook-dir {hook_dir}" in log_path.read_text()
 
 
 def test_smoke_cloudai_rejects_report_without_recognized_metrics(tmp_path):
