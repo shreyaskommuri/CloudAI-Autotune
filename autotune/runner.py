@@ -80,6 +80,7 @@ class CloudAIRunner:
         failure_reason: Optional[str] = None
         with open(stdout_path, "w") as stdout_file:
             stdout_file.write(f"autotune: command: {' '.join(shlex.quote(part) for part in cmd)}\n")
+            stdout_file.flush()
             try:
                 proc = subprocess.run(
                     cmd,
@@ -143,4 +144,8 @@ def _find_report(expected_path: Path) -> Optional[Path]:
         candidate = expected_path.parent / name
         if candidate.exists():
             return candidate
+    for name in REPORT_CANDIDATES:
+        candidates = sorted(expected_path.parent.glob(f"*/{name}"))
+        if candidates:
+            return candidates[-1]
     return None
