@@ -45,6 +45,7 @@ def cli() -> None:
 )
 @click.option("--system-config", type=click.Path(exists=True, path_type=Path), default=None)
 @click.option("--tests-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
+@click.option("--hook-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
 @click.option("--notes", default=None, help="Intent or context to store with this experiment.")
 @click.option(
     "--metadata",
@@ -60,6 +61,7 @@ def run(
     timeout_sec: Optional[float],
     system_config: Optional[Path],
     tests_dir: Optional[Path],
+    hook_dir: Optional[Path],
     notes: Optional[str],
     metadata_items: tuple[str, ...],
 ) -> None:
@@ -86,6 +88,7 @@ def run(
             dry_run=dry_run,
             system_config=system_config,
             tests_dir=tests_dir,
+            hook_dir=hook_dir,
             timeout_sec=timeout_sec,
         )
         result = runner.run(config_path, run_id)
@@ -605,6 +608,7 @@ def recommend(
 @click.option("--cloudai-bin", default="cloudai", help="Name/path of the CloudAI CLI binary.")
 @click.option("--system-config", type=click.Path(exists=True, path_type=Path), default=None)
 @click.option("--tests-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
+@click.option("--hook-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None)
 @click.option("--runs-dir", type=click.Path(path_type=Path), default=Path("runs"))
 @click.option("--timeout-sec", type=int, default=60, show_default=True)
 def smoke_cloudai(
@@ -612,6 +616,7 @@ def smoke_cloudai(
     cloudai_bin: str,
     system_config: Optional[Path],
     tests_dir: Optional[Path],
+    hook_dir: Optional[Path],
     runs_dir: Path,
     timeout_sec: int,
 ) -> None:
@@ -621,6 +626,7 @@ def smoke_cloudai(
         dry_run=True,
         system_config=system_config,
         tests_dir=tests_dir,
+        hook_dir=hook_dir,
         runs_dir=runs_dir,
         timeout_sec=timeout_sec,
     )
@@ -697,11 +703,16 @@ def _parse_cloudai_report(
     report_path: Path,
 ) -> tuple[Optional[dict[str, Optional[float]]], Optional[str]]:
     try:
-        return parse_report(report_path), None
+        metrics = parse_report(report_path)
     except (OSError, UnicodeError) as exc:
         reason = f"CloudAI report parsing failed: {exc}"
         result.log_diagnostic(reason)
         return None, reason
+    if not any(value is not None for value in metrics.values()):
+        reason = "CloudAI report contained no recognized metrics"
+        result.log_diagnostic(reason)
+        return None, reason
+    return metrics, None
 
 
 if __name__ == "__main__":

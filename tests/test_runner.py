@@ -153,6 +153,7 @@ def test_command_string_uses_current_cloudai_cli_when_system_config_is_set(tmp_p
         dry_run=True,
         system_config=tmp_path / "system.toml",
         tests_dir=tmp_path / "tests",
+        hook_dir=tmp_path / "hooks",
     )
 
     command = runner.command_string(tmp_path / "scenario.toml", tmp_path / "run" / "report.json")
@@ -166,5 +167,7 @@ def test_command_string_uses_current_cloudai_cli_when_system_config_is_set(tmp_p
         "--output-dir "
         f"{tmp_path / 'run'} "
         "--tests-dir "
-        f"{tmp_path / 'tests'}"
+        f"{tmp_path / 'tests'} "
+        "--hook-dir "
+        f"{tmp_path / 'hooks'}"
     )

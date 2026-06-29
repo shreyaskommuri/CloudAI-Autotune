@@ -632,11 +632,63 @@ def test_smoke_cloudai_reports_success_with_fake_cloudai(tmp_path):
         "  fi\n"
         "  shift\n"
         "done\n"
-        "dir=$(dirname \"$out\")\n"
-        "mkdir -p \"$dir\"\n"
-        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$dir/cloudai-summary.json\"\n"
+        "mkdir -p \"$out\"\n"
+        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$out/cloudai-summary.json\"\n"
     )
     cloudai.chmod(0o755)
+    system_config = tmp_path / "system.toml"
+    system_config.touch()
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    hook_dir = tmp_path / "hooks"
+    hook_dir.mkdir()
+    runs_dir = tmp_path / "runs"
+
+    result = runner.invoke(
+        cli,
+        [
+            "smoke-cloudai",
+            "configs/examples/vllm_baseline.toml",
+            "--cloudai-bin",
+            str(cloudai),
+            "--system-config",
+            str(system_config),
+            "--tests-dir",
+            str(tests_dir),
+            "--hook-dir",
+            str(hook_dir),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    log_path = next(runs_dir.glob("*/stdout.log"))
+
+    assert result.exit_code == 0
+    assert "Detected report:" in result.output
+    assert "Parsed metrics:" in result.output
+    assert f"--hook-dir {hook_dir}" in log_path.read_text()
+
+
+def test_smoke_cloudai_rejects_report_without_recognized_metrics(tmp_path):
+    runner = CliRunner()
+    cloudai = tmp_path / "fake-cloudai"
+    cloudai.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
+        "    shift\n"
+        "    out=\"$1\"\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "dir=$(dirname \"$out\")\n"
+        "mkdir -p \"$dir\"\n"
+        "printf '{\"scenario\":\"sleep\",\"status\":\"completed\",\"test_runs\":[]}' "
+        "> \"$dir/cloudai-summary.json\"\n"
+    )
+    cloudai.chmod(0o755)
+    runs_dir = tmp_path / "runs"
 
     result = runner.invoke(
         cli,
@@ -646,13 +698,14 @@ def test_smoke_cloudai_reports_success_with_fake_cloudai(tmp_path):
             "--cloudai-bin",
             str(cloudai),
             "--runs-dir",
-            str(tmp_path / "runs"),
+            str(runs_dir),
         ],
     )
+    log_path = next(runs_dir.glob("*/stdout.log"))
 
-    assert result.exit_code == 0
-    assert "Detected report:" in result.output
-    assert "Parsed metrics:" in result.output
+    assert result.exit_code == 1
+    assert "CloudAI report contained no recognized metrics" in result.output
+    assert "autotune: CloudAI report contained no recognized metrics" in log_path.read_text()
 
 
 def test_smoke_cloudai_exits_nonzero_on_failure(tmp_path):
@@ -733,6 +786,44 @@ def test_run_logs_report_parse_failure_and_marks_experiment_failed(tmp_path, mon
     assert "CloudAI report parsing failed:" in result.output
     assert "status=failed" in listed.output
     assert "autotune: CloudAI report parsing failed:" in log_path.read_text()
+
+
+def test_run_rejects_report_without_recognized_metrics(tmp_path, monkeypatch):
+    runner = CliRunner()
+    config_path = Path("configs/examples/vllm_baseline.toml").resolve()
+    db_path = tmp_path / "demo.db"
+    cloudai = tmp_path / "empty-report-cloudai"
+    cloudai.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--output' ]; then\n"
+        "    shift\n"
+        "    out=\"$1\"\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "printf '{\"scenario\":\"empty\",\"status\":\"completed\",\"test_runs\":[]}' > \"$out\"\n"
+    )
+    cloudai.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli,
+        [
+            "run",
+            str(config_path),
+            "--db",
+            str(db_path),
+            "--cloudai-bin",
+            str(cloudai),
+        ],
+    )
+    listed = runner.invoke(cli, ["list", "--db", str(db_path)])
+
+    assert result.exit_code == 1
+    assert "CloudAI report contained no recognized metrics" in result.output
+    assert "status=failed" in listed.output
 
 
 def test_run_timeout_is_logged_and_returns_nonzero(tmp_path, monkeypatch):
