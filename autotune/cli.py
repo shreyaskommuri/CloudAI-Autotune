@@ -697,11 +697,16 @@ def _parse_cloudai_report(
     report_path: Path,
 ) -> tuple[Optional[dict[str, Optional[float]]], Optional[str]]:
     try:
-        return parse_report(report_path), None
+        metrics = parse_report(report_path)
     except (OSError, UnicodeError) as exc:
         reason = f"CloudAI report parsing failed: {exc}"
         result.log_diagnostic(reason)
         return None, reason
+    if not any(value is not None for value in metrics.values()):
+        reason = "CloudAI report contained no recognized metrics"
+        result.log_diagnostic(reason)
+        return None, reason
+    return metrics, None
 
 
 if __name__ == "__main__":
