@@ -30,6 +30,7 @@ def test_run_returns_failed_result_when_command_exits_nonzero(tmp_path):
     assert result.returncode == 7
     assert result.stdout_path.exists()
     log = result.stdout_path.read_text()
+    assert log.splitlines()[0].startswith("autotune: command:")
     assert "backend exploded" in log
     assert "autotune: CloudAI exited with code 7" in log
     assert result.failure_reason == "CloudAI exited with code 7"
@@ -113,6 +114,36 @@ def test_run_prefers_cloudai_summary_report(tmp_path):
 
     assert result.succeeded
     assert result.report_path == tmp_path / "0006_test" / "cloudai-summary.json"
+
+
+def test_run_detects_cloudai_summary_in_scenario_output_directory(tmp_path):
+    script = tmp_path / "fake_cloudai.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--output-dir' ]; then\n"
+        "    shift\n"
+        "    out=\"$1\"\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "mkdir -p \"$out/scenario_timestamp\"\n"
+        "printf '{\"metrics\":{\"throughput_tokens_per_sec\": 123}}' "
+        "> \"$out/scenario_timestamp/cloudai-summary.json\"\n"
+    )
+    script.chmod(0o755)
+    runner = CloudAIRunner(
+        cloudai_bin=str(script),
+        runs_dir=tmp_path,
+        dry_run=True,
+        system_config=tmp_path / "system.toml",
+    )
+
+    result = runner.run(tmp_path / "config.toml", "0007_test")
+
+    assert result.succeeded
+    assert result.report_path == tmp_path / "0007_test" / "scenario_timestamp" / "cloudai-summary.json"
 
 
 def test_command_string_uses_current_cloudai_cli_when_system_config_is_set(tmp_path):
