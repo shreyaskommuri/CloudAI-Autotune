@@ -34,6 +34,9 @@ with st.sidebar:
     db_path = st.text_input("Database path", value=str(DEFAULT_DB_PATH))
     knob = st.text_input("Tunable knob (dotted config key)", value=DEFAULT_KNOB)
     latency_budget = st.number_input("Latency budget (ms, optional)", min_value=0.0, value=0.0, step=10.0)
+    ttft_budget = st.number_input("TTFT budget (ms, optional)", min_value=0.0, value=0.0, step=10.0)
+    min_throughput = st.number_input("Min throughput (tok/s, optional)", min_value=0.0, value=0.0, step=10.0)
+    max_failure_rate = st.number_input("Max failure rate (0-1, optional)", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
 
 if not Path(db_path).exists():
     st.warning(f"No database found at `{db_path}` yet. Run `autotune run <config>` to create one.")
@@ -149,7 +152,14 @@ if not completed.empty:
 st.subheader("Recommendation")
 scenario_filter = None if selected_scenario == "All" else selected_scenario
 with ExperimentDB(db_path) as db:
-    rec = recommend_next(db.list_experiments(scenario=scenario_filter), knob=knob, latency_budget_ms=budget)
+    rec = recommend_next(
+        db.list_experiments(scenario=scenario_filter),
+        knob=knob,
+        latency_budget_ms=budget,
+        ttft_budget_ms=ttft_budget if ttft_budget > 0 else None,
+        min_throughput_tokens_per_sec=min_throughput if min_throughput > 0 else None,
+        max_failure_rate=max_failure_rate if max_failure_rate > 0 else None,
+    )
 
 st.metric(label=f"Suggested next value for `{rec.knob}`", value=str(rec.suggested_value), delta=str(rec.current_value))
 st.write(rec.reason)
