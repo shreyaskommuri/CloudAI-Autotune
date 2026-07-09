@@ -2,7 +2,9 @@ from autotune.database import Experiment
 from autotune.recommender import recommend_next
 
 
-def _exp(id_, batch_size, throughput, latency, status="completed"):
+def _exp(id_, batch_size, throughput, latency, status="completed", **extra_metrics):
+    metrics = {"throughput_tokens_per_sec": throughput, "latency_ms": latency}
+    metrics.update(extra_metrics)
     return Experiment(
         id=id_,
         created_at="2026-01-01",
@@ -11,7 +13,7 @@ def _exp(id_, batch_size, throughput, latency, status="completed"):
         config_path=f"cfg_{id_}.toml",
         config={"serving": {"batch_size": batch_size}},
         status=status,
-        metrics={"throughput_tokens_per_sec": throughput, "latency_ms": latency},
+        metrics=metrics,
     )
 
 
@@ -113,6 +115,60 @@ def test_recommend_respects_latency_budget():
     assert rec.suggested_value == 6
     assert "budget" in rec.reason
     assert "untested" in rec.reason
+
+
+def test_recommend_respects_ttft_budget_even_when_latency_is_fine():
+    experiments = [
+        _exp(1, batch_size=4, throughput=330, latency=160, ttft_ms=30),
+        _exp(2, batch_size=8, throughput=400, latency=180, ttft_ms=90),
+    ]
+
+    rec = recommend_next(experiments, ttft_budget_ms=50)
+
+    # latency stays under any reasonable budget, but ttft blew past 50ms —
+    # the recommender must still treat run #2 as a regression.
+    assert rec.suggested_value == 6
+    assert "ttft" in rec.reason
+    assert "budget" in rec.reason
+
+
+def test_recommend_respects_failure_rate_budget():
+    experiments = [
+        _exp(1, batch_size=4, throughput=330, latency=160, failure_rate=0.0),
+        _exp(2, batch_size=8, throughput=400, latency=180, failure_rate=0.2),
+    ]
+
+    rec = recommend_next(experiments, max_failure_rate=0.05)
+
+    assert rec.suggested_value == 6
+    assert "failure_rate" in rec.reason
+
+
+def test_recommend_respects_min_throughput_budget():
+    experiments = [
+        _exp(1, batch_size=4, throughput=330, latency=160),
+        _exp(2, batch_size=8, throughput=100, latency=90),
+    ]
+
+    rec = recommend_next(experiments, min_throughput_tokens_per_sec=200)
+
+    assert rec.suggested_value == 6
+    assert "throughput" in rec.reason
+
+
+def test_recommend_ignores_missing_ttft_metric_when_no_budget_breach():
+    # Older runs without a tracked ttft_ms metric shouldn't be excluded from
+    # consideration just because a ttft budget is configured — only an actual
+    # ttft breach should count as a regression.
+    experiments = [
+        _exp(1, batch_size=1, throughput=120, latency=90),
+        _exp(2, batch_size=2, throughput=230, latency=120),
+    ]
+
+    rec = recommend_next(experiments, ttft_budget_ms=50)
+
+    assert rec.current_value == 2
+    assert rec.suggested_value == 4
 
 
 def test_recommend_skips_already_tried_growth_candidate():

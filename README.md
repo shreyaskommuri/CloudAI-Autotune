@@ -321,6 +321,19 @@ The recommender compares completed experiments for one or more knobs. It tries
 to avoid suggesting a value that was already tested. If `4` was good and `8`
 crossed the latency budget, it may suggest `6` as the next untested point.
 
+`recommend` accepts the same budget policy as `autotune check` — latency,
+time to first token, minimum throughput, runtime, and failure rate — so a run
+that regresses on any one of them is treated as over budget, not just latency:
+
+```bash
+autotune recommend \
+  --knob serving.batch_size \
+  --latency-budget-ms 200 \
+  --ttft-budget-ms 50 \
+  --min-throughput-tokens-per-sec 300 \
+  --max-failure-rate 0.05
+```
+
 To write that suggestion directly into a new config, pass a base config and an
 output path:
 

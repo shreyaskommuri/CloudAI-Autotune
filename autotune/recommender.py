@@ -5,6 +5,10 @@ across completed runs. If throughput is still climbing faster than latency is
 degrading (i.e. the tokens/sec-per-ms-of-latency ratio is improving or stable),
 recommend doubling the knob; otherwise recommend backing off to the best
 observed tradeoff point.
+
+Budget policy reuses `autotune.budgets`: any run that fails a configured
+latency, TTFT, throughput, runtime, or failure-rate budget is excluded from
+"best observed tradeoff" candidates, the same policy `autotune check` applies.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from autotune.budgets import Budgets, evaluate_experiment
 from autotune.database import Experiment
 
 DEFAULT_KNOB = "serving.batch_size"
@@ -57,12 +62,24 @@ def recommend_next(
     experiments: list[Experiment],
     knob: str = DEFAULT_KNOB,
     latency_budget_ms: Optional[float] = None,
+    ttft_budget_ms: Optional[float] = None,
+    min_throughput_tokens_per_sec: Optional[float] = None,
+    runtime_budget_sec: Optional[float] = None,
+    max_failure_rate: Optional[float] = None,
 ) -> Recommendation:
     """Recommend the next value to try for `knob` based on completed runs.
 
-    `latency_budget_ms`, if given, caps how far latency is allowed to grow —
-    runs over budget are treated as regressions regardless of throughput gains.
+    Any budget argument, if given, caps how far that metric is allowed to
+    regress — a run that fails a budget is treated as over-budget regardless
+    of throughput gains, the same policy `autotune check` applies.
     """
+    budgets = Budgets(
+        latency_ms=latency_budget_ms,
+        ttft_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_sec=runtime_budget_sec,
+        failure_rate=max_failure_rate,
+    )
     completed = [
         e
         for e in experiments
@@ -86,12 +103,12 @@ def recommend_next(
     latest_throughput = _metric_value(latest, "throughput_tokens_per_sec")
     latest_latency = _metric_value(latest, "latency_ms")
 
-    if latency_budget_ms is not None and (latest_latency or 0) > latency_budget_ms:
-        # Latest run blew the latency budget — recommend the best prior tradeoff.
+    latest_breach = evaluate_experiment(latest, budgets) if budgets.has_checks() else None
+    if latest_breach is not None and latest_breach.status == "fail":
+        # Latest run failed a budget — recommend the best prior in-budget tradeoff.
+        breach_text = "; ".join(latest_breach.reasons)
         candidates = [
-            e
-            for e in completed
-            if (_metric_value(e, "latency_ms") or 0) <= latency_budget_ms
+            e for e in completed if evaluate_experiment(e, budgets).status != "fail"
         ]
         if candidates:
             best = max(candidates, key=lambda e: _efficiency(e) or 0)
@@ -106,9 +123,8 @@ def recommend_next(
                 current_value=latest_value,
                 suggested_value=suggested,
                 reason=(
-                    f"{knob}={latest_value} pushed latency to {latest_latency:.0f}ms, "
-                    f"over the {latency_budget_ms:.0f}ms budget. Best observed tradeoff "
-                    f"within budget was {knob}={best_value} "
+                    f"{knob}={latest_value} breached budget ({breach_text}). "
+                    f"Best observed tradeoff within budget was {knob}={best_value} "
                     f"({_metric_value(best, 'throughput_tokens_per_sec'):.0f} tok/s @ "
                     f"{_metric_value(best, 'latency_ms'):.0f}ms). Try untested {knob}="
                     f"{suggested} near that safer region."
@@ -121,7 +137,7 @@ def recommend_next(
             current_value=latest_value,
             suggested_value=suggested,
             reason=(
-                f"All runs exceed the {latency_budget_ms:.0f}ms latency budget. "
+                f"All completed runs breach the configured budget ({breach_text}). "
                 f"Try untested {knob}={suggested}, smaller than the lowest value "
                 f"already tried ({smallest_value})."
             ),

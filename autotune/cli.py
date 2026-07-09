@@ -551,6 +551,30 @@ def _ingest_config(
 )
 @click.option("--latency-budget-ms", type=float, default=None, help="Maximum acceptable latency in ms.")
 @click.option(
+    "--ttft-budget-ms",
+    type=float,
+    default=None,
+    help="Maximum acceptable time to first token in ms.",
+)
+@click.option(
+    "--min-throughput-tokens-per-sec",
+    type=float,
+    default=None,
+    help="Minimum acceptable generated-token throughput.",
+)
+@click.option(
+    "--runtime-budget-sec",
+    type=float,
+    default=None,
+    help="Maximum acceptable runtime in seconds.",
+)
+@click.option(
+    "--max-failure-rate",
+    type=float,
+    default=None,
+    help="Maximum acceptable failed-request ratio.",
+)
+@click.option(
     "--derive-from",
     type=click.Path(exists=True, path_type=Path),
     default=None,
@@ -567,6 +591,10 @@ def recommend(
     scenario: Optional[str],
     knobs: tuple[str, ...],
     latency_budget_ms: Optional[float],
+    ttft_budget_ms: Optional[float],
+    min_throughput_tokens_per_sec: Optional[float],
+    runtime_budget_sec: Optional[float],
+    max_failure_rate: Optional[float],
     derive_from: Optional[Path],
     out_config: Optional[Path],
 ) -> None:
@@ -578,7 +606,15 @@ def recommend(
     with ExperimentDB(db_path) as db:
         experiments = db.list_experiments(scenario=scenario)
         recommendations = [
-            recommend_next(experiments, knob=knob, latency_budget_ms=latency_budget_ms)
+            recommend_next(
+                experiments,
+                knob=knob,
+                latency_budget_ms=latency_budget_ms,
+                ttft_budget_ms=ttft_budget_ms,
+                min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+                runtime_budget_sec=runtime_budget_sec,
+                max_failure_rate=max_failure_rate,
+            )
             for knob in knobs
         ]
     for rec in recommendations:
