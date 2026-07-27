@@ -17,7 +17,7 @@ from autotune.comparison import RegressionCheck, compare_latest_to_previous
 from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
 from autotune.parser import parse_report
-from autotune.recommender import DEFAULT_KNOB, recommend_next
+from autotune.recommender import DEFAULT_KNOB, discover_knobs, recommend_next
 from autotune.runner import CloudAIRunner, RunResult
 
 DEMO_REPORTS = (
@@ -571,6 +571,11 @@ def _ingest_config(
     multiple=True,
     help="Dotted config key to tune; repeat for multi-knob recommendations.",
 )
+@click.option(
+    "--all-knobs",
+    is_flag=True,
+    help="Recommend for every numeric config key seen across completed runs, instead of --knob.",
+)
 @click.option("--latency-budget-ms", type=float, default=None, help="Maximum acceptable latency in ms.")
 @click.option(
     "--ttft-budget-ms",
@@ -612,6 +617,7 @@ def recommend(
     db_path: str,
     scenario: Optional[str],
     knobs: tuple[str, ...],
+    all_knobs: bool,
     latency_budget_ms: Optional[float],
     ttft_budget_ms: Optional[float],
     min_throughput_tokens_per_sec: Optional[float],
@@ -623,22 +629,32 @@ def recommend(
     """Recommend the next config value to try based on experiment history."""
     if (derive_from is None) != (out_config is None):
         raise click.UsageError("--derive-from and --out-config must be provided together.")
-    knobs = knobs or (DEFAULT_KNOB,)
+    if all_knobs and knobs:
+        raise click.UsageError("--all-knobs and --knob cannot be used together.")
 
     with ExperimentDB(db_path) as db:
         experiments = db.list_experiments(scenario=scenario)
-        recommendations = [
-            recommend_next(
-                experiments,
-                knob=knob,
-                latency_budget_ms=latency_budget_ms,
-                ttft_budget_ms=ttft_budget_ms,
-                min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
-                runtime_budget_sec=runtime_budget_sec,
-                max_failure_rate=max_failure_rate,
-            )
-            for knob in knobs
-        ]
+
+    if all_knobs:
+        knobs = tuple(discover_knobs(experiments))
+        if not knobs:
+            click.echo("No completed experiments with numeric config values found.")
+            return
+    else:
+        knobs = knobs or (DEFAULT_KNOB,)
+
+    recommendations = [
+        recommend_next(
+            experiments,
+            knob=knob,
+            latency_budget_ms=latency_budget_ms,
+            ttft_budget_ms=ttft_budget_ms,
+            min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+            runtime_budget_sec=runtime_budget_sec,
+            max_failure_rate=max_failure_rate,
+        )
+        for knob in knobs
+    ]
     for rec in recommendations:
         click.echo(f"Knob: {rec.knob}")
         click.echo(f"Current: {rec.current_value}  ->  Suggested: {rec.suggested_value}")

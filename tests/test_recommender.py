@@ -1,5 +1,5 @@
 from autotune.database import Experiment
-from autotune.recommender import recommend_next
+from autotune.recommender import discover_knobs, recommend_next
 
 
 def _exp(id_, batch_size, throughput, latency, status="completed", **extra_metrics):
@@ -182,3 +182,46 @@ def test_recommend_skips_already_tried_growth_candidate():
 
     assert rec.suggested_value == 8
     assert rec.suggested_value not in {1, 2, 4}
+
+
+def _make_experiment(id_, config, status="completed"):
+    return Experiment(
+        id=id_,
+        created_at="2026-01-01",
+        scenario="vllm_baseline",
+        backend="vllm",
+        config_path=f"cfg_{id_}.toml",
+        config=config,
+        status=status,
+        metrics={"throughput_tokens_per_sec": 300, "latency_ms": 150},
+    )
+
+
+def test_discover_knobs_finds_every_numeric_dotted_key():
+    experiments = [
+        _make_experiment(1, {"serving": {"batch_size": 4, "tp_size": 2}}),
+        _make_experiment(2, {"serving": {"batch_size": 8}, "model": {"max_seq_len": 4096}}),
+    ]
+
+    assert discover_knobs(experiments) == ["model.max_seq_len", "serving.batch_size", "serving.tp_size"]
+
+
+def test_discover_knobs_ignores_non_numeric_and_bool_values():
+    experiments = [
+        _make_experiment(1, {"serving": {"batch_size": 4, "backend": "vllm", "warmup": True}}),
+    ]
+
+    assert discover_knobs(experiments) == ["serving.batch_size"]
+
+
+def test_discover_knobs_ignores_incomplete_runs():
+    experiments = [
+        _make_experiment(1, {"serving": {"batch_size": 4}}, status="completed"),
+        _make_experiment(2, {"serving": {"tp_size": 2}}, status="failed"),
+    ]
+
+    assert discover_knobs(experiments) == ["serving.batch_size"]
+
+
+def test_discover_knobs_with_no_experiments():
+    assert discover_knobs([]) == []

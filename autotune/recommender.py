@@ -14,7 +14,7 @@ latency, TTFT, throughput, runtime, or failure-rate budget is excluded from
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from autotune.budgets import Budgets, evaluate_experiment
 from autotune.database import Experiment
@@ -40,6 +40,33 @@ def _knob_value(exp: Experiment, knob: str) -> Optional[float]:
         return float(node)
     except (TypeError, ValueError):
         return None
+
+
+def discover_knobs(experiments: list[Experiment]) -> list[str]:
+    """Return every dotted config key with a numeric value across completed runs.
+
+    Lets callers report a recommendation for every knob that's actually been
+    tuned without already knowing its dotted name up front.
+    """
+    knobs: set[str] = set()
+    for exp in experiments:
+        if exp.status != "completed":
+            continue
+        for key, value in _flatten_config(exp.config).items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                knobs.add(key)
+    return sorted(knobs)
+
+
+def _flatten_config(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    for key, value in data.items():
+        full_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            flat.update(_flatten_config(value, full_key))
+        else:
+            flat[full_key] = value
+    return flat
 
 
 def _efficiency(exp: Experiment) -> Optional[float]:
