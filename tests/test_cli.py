@@ -183,6 +183,61 @@ def test_recommend_supports_multiple_knobs_and_writes_config(tmp_path):
     assert written["serving"]["num_requests"] == 400.0
 
 
+def test_recommend_all_knobs_discovers_every_numeric_config_key(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+
+    for batch_size, num_requests, report in [
+        (1, 100, "reports/examples/vllm_batch1.json"),
+        (4, 200, "reports/examples/vllm_batch4.json"),
+    ]:
+        result = runner.invoke(
+            cli,
+            [
+                "ingest",
+                report,
+                "--db",
+                str(db_path),
+                "--scenario",
+                "manual_vllm",
+                "--backend",
+                "vllm",
+                "--set",
+                f"serving.batch_size={batch_size}",
+                "--set",
+                f"serving.num_requests={num_requests}",
+            ],
+        )
+        assert result.exit_code == 0
+
+    result = runner.invoke(cli, ["recommend", "--db", str(db_path), "--scenario", "manual_vllm", "--all-knobs"])
+
+    assert result.exit_code == 0
+    assert "Knob: serving.batch_size" in result.output
+    assert "Knob: serving.num_requests" in result.output
+
+
+def test_recommend_rejects_all_knobs_combined_with_explicit_knob(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["recommend", "--db", str(tmp_path / "demo.db"), "--all-knobs", "--knob", "serving.batch_size"],
+    )
+
+    assert result.exit_code != 0
+    assert "--all-knobs and --knob cannot be used together" in result.output
+
+
+def test_recommend_all_knobs_with_no_completed_experiments(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["recommend", "--db", str(tmp_path / "demo.db"), "--all-knobs"])
+
+    assert result.exit_code == 0
+    assert "No completed experiments with numeric config values found." in result.output
+
+
 def test_ingest_records_notes_for_experiment_context(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "demo.db"

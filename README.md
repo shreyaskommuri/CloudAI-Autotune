@@ -351,6 +351,16 @@ autotune recommend \
   --out-config configs/derived/batch6.toml
 ```
 
+If you don't already know every knob that's been tuned, `--all-knobs` reports
+a recommendation for every numeric dotted config key seen across completed
+runs, instead of requiring `--knob` per key:
+
+```bash
+autotune recommend --all-knobs --latency-budget-ms 200
+```
+
+`--all-knobs` and `--knob` are mutually exclusive.
+
 This prints one recommendation per knob and writes `configs/derived/batch6.toml`
 with the suggested values applied.
 
@@ -399,21 +409,13 @@ with workload-specific fallbacks, TTFT/runtime/failure-rate budgets, explainable
 runs (intent, metadata, config diffs), issue/PR/benchmark export templates,
 local-first SQLite storage, clean non-zero-exit failure handling for a
 missing/failing CloudAI binary, a dashboard runtime-budget input, `ruff`
-lint/format checks in CI, and run-over-run regression tracking
+lint/format checks in CI, run-over-run regression tracking
 (`compare_latest_to_previous`) surfaced in both the dashboard and the `pr`
-export template. Kept local-first by design, not a target with an end state —
-every new item below should keep working with zero services.
-
-### Next — needs one scoping decision, then bounded work
-
-- **Multi-knob visibility, not multi-knob search.** `recommend_next()` is
-  single-knob (`DEFAULT_KNOB = "serving.batch_size"`), and `--knob` already
-  lets you sweep any one dotted key. The lowest-risk next step is a
-  `recommend-set` command that reports the current best-observed value for
-  *every* knob seen across experiment history in one call, instead of
-  re-running `recommend --knob X` per knob by hand. This is coordinate-wise
-  reporting on top of existing single-knob logic — not a new search
-  algorithm, and not the same thing as item below.
+export template, and multi-knob *visibility* via `recommend --all-knobs`
+(discovers every numeric config key seen across completed runs, rather than
+requiring `--knob` per key up front). Kept local-first by design, not a
+target with an end state — every new item below should keep working with
+zero services.
 
 ### Later — needs your input before any code gets written
 
