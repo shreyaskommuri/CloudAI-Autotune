@@ -16,6 +16,26 @@ class RunComparison:
     latency_delta_ms: Optional[float]
 
 
+@dataclass(frozen=True)
+class RegressionCheck:
+    latest: Optional[Experiment]
+    previous: Optional[Experiment]
+    throughput_delta_pct: Optional[float]
+    latency_delta_ms: Optional[float]
+
+    @property
+    def regressed(self) -> bool:
+        """True if the latest run is worse than the run immediately before it.
+
+        Distinct from RunComparison: a run can be worse than its immediate
+        predecessor without being the worst run ever recorded, and that's the
+        signal this catches.
+        """
+        throughput_dropped = self.throughput_delta_pct is not None and self.throughput_delta_pct < 0
+        latency_grew = self.latency_delta_ms is not None and self.latency_delta_ms > 0
+        return throughput_dropped or latency_grew
+
+
 def compare_best_and_latest(
     experiments: list[Experiment],
     latency_budget_ms: Optional[float] = None,
@@ -30,6 +50,20 @@ def compare_best_and_latest(
         latest=latest,
         throughput_delta_pct=_throughput_delta_pct(latest, best),
         latency_delta_ms=_metric_delta(latest, best, "latency_ms"),
+    )
+
+
+def compare_latest_to_previous(experiments: list[Experiment]) -> RegressionCheck:
+    """Compare the latest completed run with the completed run immediately before it."""
+    completed = sorted((exp for exp in experiments if exp.status == "completed"), key=lambda exp: exp.id or 0)
+    latest = completed[-1] if completed else None
+    previous = completed[-2] if len(completed) >= 2 else None
+
+    return RegressionCheck(
+        latest=latest,
+        previous=previous,
+        throughput_delta_pct=_throughput_delta_pct(latest, previous),
+        latency_delta_ms=_metric_delta(latest, previous, "latency_ms"),
     )
 
 
@@ -55,25 +89,25 @@ def _best_throughput_run(
 
 def _throughput_delta_pct(
     latest: Optional[Experiment],
-    best: Optional[Experiment],
+    baseline: Optional[Experiment],
 ) -> Optional[float]:
     latest_value = _metric(latest, "throughput_tokens_per_sec")
-    best_value = _metric(best, "throughput_tokens_per_sec")
-    if latest_value is None or best_value in (None, 0):
+    baseline_value = _metric(baseline, "throughput_tokens_per_sec")
+    if latest_value is None or baseline_value in (None, 0):
         return None
-    return (latest_value - best_value) / best_value * 100
+    return (latest_value - baseline_value) / baseline_value * 100
 
 
 def _metric_delta(
     latest: Optional[Experiment],
-    best: Optional[Experiment],
+    baseline: Optional[Experiment],
     metric: str,
 ) -> Optional[float]:
     latest_value = _metric(latest, metric)
-    best_value = _metric(best, metric)
-    if latest_value is None or best_value is None:
+    baseline_value = _metric(baseline, metric)
+    if latest_value is None or baseline_value is None:
         return None
-    return latest_value - best_value
+    return latest_value - baseline_value
 
 
 def _metric(exp: Optional[Experiment], metric: str) -> Optional[float]:

@@ -13,6 +13,7 @@ import click
 
 from autotune import config_mutator
 from autotune.budgets import BudgetCheck, Budgets, evaluate_experiment
+from autotune.comparison import RegressionCheck, compare_latest_to_previous
 from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
 from autotune.parser import parse_report
@@ -200,12 +201,13 @@ def export(
         raise click.UsageError("--template can only be used with --format markdown.")
 
     with ExperimentDB(db_path) as db:
-        rows = [_experiment_row(exp) for exp in db.list_experiments(scenario=scenario)]
+        experiments = db.list_experiments(scenario=scenario)
+        rows = [_experiment_row(exp) for exp in experiments]
 
     if export_format == "json":
         output = json.dumps(rows, indent=2) + "\n"
     elif export_format == "markdown":
-        output = _rows_to_markdown(rows, template=template)
+        output = _rows_to_markdown(rows, template=template, experiments=experiments)
     else:
         output = _rows_to_csv(rows)
 
@@ -357,11 +359,15 @@ def _export_fieldnames(rows: list[dict[str, object]]) -> list[str]:
     return base + metric_keys + metadata_keys
 
 
-def _rows_to_markdown(rows: list[dict[str, object]], template: str = "table") -> str:
+def _rows_to_markdown(
+    rows: list[dict[str, object]],
+    template: str = "table",
+    experiments: Optional[list[Experiment]] = None,
+) -> str:
     if template == "issue":
         return _rows_to_issue_markdown(rows)
     if template == "pr":
-        return _rows_to_pr_markdown(rows)
+        return _rows_to_pr_markdown(rows, experiments or [])
     fieldnames = _export_fieldnames(rows)
     lines = [
         "| " + " | ".join(fieldnames) + " |",
@@ -397,13 +403,35 @@ def _rows_to_issue_markdown(rows: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
-def _rows_to_pr_markdown(rows: list[dict[str, object]]) -> str:
+def _regression_summary(regression: RegressionCheck) -> str:
+    if regression.latest is None:
+        return "No completed experiments to check."
+    if regression.previous is None:
+        return f"No prior completed run to compare #{regression.latest.id} against yet."
+
+    parts = [f"Run #{regression.latest.id} vs. immediately preceding run #{regression.previous.id}."]
+    if regression.throughput_delta_pct is not None:
+        direction = "higher" if regression.throughput_delta_pct > 0 else "lower"
+        parts.append(f"Throughput is {abs(regression.throughput_delta_pct):.1f}% {direction}.")
+    if regression.latency_delta_ms is not None:
+        direction = "higher" if regression.latency_delta_ms > 0 else "lower"
+        parts.append(f"Latency is {abs(regression.latency_delta_ms):.1f} ms {direction}.")
+    summary = " ".join(parts)
+
+    return f"REGRESSED: {summary}" if regression.regressed else f"No regression: {summary}"
+
+
+def _rows_to_pr_markdown(rows: list[dict[str, object]], experiments: list[Experiment]) -> str:
     lines = [
         "## Benchmark Evidence",
         "",
         "### What Was Tested",
         "",
         _rows_to_markdown(rows, template="table").rstrip(),
+        "",
+        "### Regression Check",
+        "",
+        _regression_summary(compare_latest_to_previous(experiments)),
         "",
         "### Validation",
         "",
