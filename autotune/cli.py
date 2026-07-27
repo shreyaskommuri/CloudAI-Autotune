@@ -132,10 +132,7 @@ def list_experiments(db_path: str, scenario: Optional[str]) -> None:
             click.echo("No experiments recorded yet.")
             return
         for exp in experiments:
-            line = (
-                f"[{exp.id}] {exp.scenario} ({exp.backend}) status={exp.status} "
-                f"metrics={exp.metrics}"
-            )
+            line = f"[{exp.id}] {exp.scenario} ({exp.backend}) status={exp.status} metrics={exp.metrics}"
             if exp.notes:
                 line += f" notes={exp.notes}"
             if exp.metadata:
@@ -287,7 +284,7 @@ def check(
         return
 
     checks = [evaluate_experiment(exp, budgets) for exp in experiments]
-    for exp, check_result in zip(experiments, checks):
+    for exp, check_result in zip(experiments, checks, strict=True):
         reason = "; ".join(check_result.reasons)
         click.echo(f"[{exp.id}] {exp.scenario} status={check_result.status} - {reason}")
     click.echo(_check_summary(checks))
@@ -302,10 +299,7 @@ def _check_summary(checks: list[BudgetCheck]) -> str:
         status = check_result.status
         counts[status if status in counts else "unknown"] += 1
     total = sum(counts.values())
-    return (
-        f"Summary: {counts['pass']} pass, {counts['fail']} fail, "
-        f"{counts['unknown']} unknown ({total} total)"
-    )
+    return f"Summary: {counts['pass']} pass, {counts['fail']} fail, {counts['unknown']} unknown ({total} total)"
 
 
 def _echo_diffs(diffs: tuple[FieldDiff, ...]) -> None:
@@ -623,11 +617,7 @@ def recommend(
         click.echo(f"Reason: {rec.reason}")
 
     if derive_from is not None and out_config is not None:
-        overrides = {
-            rec.knob: rec.suggested_value
-            for rec in recommendations
-            if rec.suggested_value is not None
-        }
+        overrides = {rec.knob: rec.suggested_value for rec in recommendations if rec.suggested_value is not None}
         if not overrides:
             click.echo("No suggested value available; derived config not written.")
             return

@@ -366,6 +366,13 @@ Run tests:
 .venv/bin/python -m pytest -q
 ```
 
+Lint and format check (matches CI):
+
+```bash
+.venv/bin/python -m ruff check autotune dashboard tests
+.venv/bin/python -m ruff format --check autotune dashboard tests
+```
+
 Current test coverage includes:
 
 - config derivation

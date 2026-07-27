@@ -107,9 +107,7 @@ def recommend_next(
     if latest_breach is not None and latest_breach.status == "fail":
         # Latest run failed a budget — recommend the best prior in-budget tradeoff.
         breach_text = "; ".join(latest_breach.reasons)
-        candidates = [
-            e for e in completed if evaluate_experiment(e, budgets).status != "fail"
-        ]
+        candidates = [e for e in completed if evaluate_experiment(e, budgets).status != "fail"]
         if candidates:
             best = max(candidates, key=lambda e: _efficiency(e) or 0)
             best_value = _knob_value(best, knob)

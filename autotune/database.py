@@ -105,10 +105,7 @@ class ExperimentDB:
         return cur.lastrowid
 
     def _ensure_columns(self) -> None:
-        columns = {
-            row["name"]
-            for row in self._conn.execute("PRAGMA table_info(experiments)").fetchall()
-        }
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(experiments)").fetchall()}
         if "metadata_json" not in columns:
             self._conn.execute("ALTER TABLE experiments ADD COLUMN metadata_json TEXT")
 
@@ -137,9 +134,7 @@ class ExperimentDB:
         self._conn.commit()
 
     def get(self, experiment_id: int) -> Optional[Experiment]:
-        row = self._conn.execute(
-            "SELECT * FROM experiments WHERE id = ?", (experiment_id,)
-        ).fetchone()
+        row = self._conn.execute("SELECT * FROM experiments WHERE id = ?", (experiment_id,)).fetchone()
         return Experiment.from_row(row) if row else None
 
     def list_experiments(self, scenario: Optional[str] = None) -> list[Experiment]:

@@ -37,7 +37,9 @@ with st.sidebar:
     ttft_budget = st.number_input("TTFT budget (ms, optional)", min_value=0.0, value=0.0, step=10.0)
     min_throughput = st.number_input("Min throughput (tok/s, optional)", min_value=0.0, value=0.0, step=10.0)
     runtime_budget = st.number_input("Runtime budget (sec, optional)", min_value=0.0, value=0.0, step=10.0)
-    max_failure_rate = st.number_input("Max failure rate (0-1, optional)", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
+    max_failure_rate = st.number_input(
+        "Max failure rate (0-1, optional)", min_value=0.0, max_value=1.0, value=0.0, step=0.01
+    )
 
 if not Path(db_path).exists():
     st.warning(f"No database found at `{db_path}` yet. Run `autotune run <config>` to create one.")
@@ -90,22 +92,14 @@ comparison = compare_best_and_latest(filtered, latency_budget_ms=budget)
 st.subheader("Comparison")
 col1, col2, col3 = st.columns(3)
 with col1:
-    best_value = (
-        comparison.best.metrics.get("throughput_tokens_per_sec")
-        if comparison.best is not None
-        else None
-    )
+    best_value = comparison.best.metrics.get("throughput_tokens_per_sec") if comparison.best is not None else None
     st.metric(
         label="Best throughput run",
         value=f"#{comparison.best.id}" if comparison.best is not None else "n/a",
         delta=_format_number(best_value, " tok/s"),
     )
 with col2:
-    latest_value = (
-        comparison.latest.metrics.get("throughput_tokens_per_sec")
-        if comparison.latest is not None
-        else None
-    )
+    latest_value = comparison.latest.metrics.get("throughput_tokens_per_sec") if comparison.latest is not None else None
     st.metric(
         label="Latest completed run",
         value=f"#{comparison.latest.id}" if comparison.latest is not None else "n/a",
@@ -114,16 +108,8 @@ with col2:
 with col3:
     st.metric(
         label="Latest vs. best",
-        value=(
-            f"{comparison.throughput_delta_pct:+.1f}%"
-            if comparison.throughput_delta_pct is not None
-            else "n/a"
-        ),
-        delta=(
-            f"{comparison.latency_delta_ms:+.1f} ms latency"
-            if comparison.latency_delta_ms is not None
-            else None
-        ),
+        value=(f"{comparison.throughput_delta_pct:+.1f}%" if comparison.throughput_delta_pct is not None else "n/a"),
+        delta=(f"{comparison.latency_delta_ms:+.1f} ms latency" if comparison.latency_delta_ms is not None else None),
     )
 
 if comparison.best is not None and comparison.latest is not None:
