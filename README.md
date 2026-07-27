@@ -381,19 +381,58 @@ Goal: make Autotune the small, reliable companion for CloudAI performance
 tuning — easy enough for a first benchmark, useful enough for repeated
 production-readiness checks.
 
-- Make the first-run path obvious: one command for demo, one command for an
-  existing CloudAI report, and one command for a real CloudAI run.
-- Support a stable CloudAI machine-readable summary artifact when CloudAI
-  provides one, while keeping workload-specific parsers as fallbacks.
-- Continue improving multi-knob recommendations beyond independent knob
-  suggestions toward budget-aware search across interacting backend settings.
-- Track experiment intent, environment, hardware, and config diffs so results
-  are explainable later.
-- Expand pass/fail budgets to include time to first token and richer policy
-  reporting.
-- Make the dashboard useful for comparison: best run, latest run, regressions,
-  and suggested next config.
-- Expand export templates for issue, pull request, and benchmark-report
-  summaries.
-- Keep the tool local-first: SQLite by default, no service required, and clean
-  failure messages when CloudAI or benchmark artifacts are missing.
+Shipped: one-command demo/ingest/run paths, `cloudai-summary.json` support
+with workload-specific fallbacks, TTFT/runtime/failure-rate budgets, explainable
+runs (intent, metadata, config diffs), issue/PR/benchmark export templates,
+local-first SQLite storage, and clean non-zero-exit failure handling for a
+missing/failing CloudAI binary. Kept local-first by design, not a target with
+an end state — every new item below should keep working with zero services.
+
+### Now — small, scoped, no open design questions
+
+- **Dashboard is missing a runtime budget input.** `Budgets`/`recommend_next()`
+  (`autotune/budgets.py`, `autotune/recommender.py`) already support
+  `runtime_budget_sec`, but `dashboard/app.py`'s sidebar only collects
+  latency, TTFT, throughput, and failure-rate — so the dashboard silently
+  can't apply a budget the CLI already supports. Add the missing sidebar
+  input and thread it through.
+- **No linting in CI.** `.github/workflows/ci.yml` runs tests + `compileall`
+  + a CLI smoke test, but nothing checks style or catches latent bugs
+  (unused imports, shadowing, etc.) before merge. Add `ruff check`/`ruff
+  format --check`, matching the convention `NVIDIA/cloudai` itself already
+  uses — cheap, and keeps the two codebases easier to move between.
+- **Comparison only tracks best-vs-latest, not run-over-run regressions.**
+  `comparison.compare_best_and_latest` compares the newest completed run
+  against the best-ever completed run. A run that regressed against the run
+  immediately before it — but isn't the global worst — never gets flagged.
+  Add a `compare_latest_to_previous` alongside the existing best/latest
+  comparison and surface it in the dashboard and `export`.
+
+### Next — needs one scoping decision, then bounded work
+
+- **Multi-knob visibility, not multi-knob search.** `recommend_next()` is
+  single-knob (`DEFAULT_KNOB = "serving.batch_size"`), and `--knob` already
+  lets you sweep any one dotted key. The lowest-risk next step is a
+  `recommend-set` command that reports the current best-observed value for
+  *every* knob seen across experiment history in one call, instead of
+  re-running `recommend --knob X` per knob by hand. This is coordinate-wise
+  reporting on top of existing single-knob logic — not a new search
+  algorithm, and not the same thing as item below.
+
+### Later — needs your input before any code gets written
+
+- **Joint multi-knob search.** Actually searching *combinations* of knobs
+  (not just reporting independent bests) needs a real objective function
+  beyond the current throughput/latency ratio, a search-budget model, and a
+  decision on whether Autotune should ever suggest untried combinations or
+  stay strictly "next single point from history." Don't start this without
+  agreeing on scope — it's the one item here that's a genuine design
+  project, not a bounded fix.
+- **Consider wrapping CloudAI's own DSE instead of competing with it.**
+  CloudAI already has a working multi-parameter search stack —
+  `cloudai_gym.py`'s Gymnasium env, `GridSearchAgent` and reward-function
+  agents in `cloudai/configurator/`, and `trajectory.csv`/`env.csv` step
+  logs with reward per config. Before building joint search in Autotune
+  (above), it's worth checking whether ingesting and visualizing CloudAI DSE
+  trajectories gets most of the value with far less risk of duplicating
+  logic CloudAI already maintains.
