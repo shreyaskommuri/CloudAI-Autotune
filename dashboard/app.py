@@ -14,7 +14,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from autotune.comparison import compare_best_and_latest
+from autotune.comparison import compare_best_and_latest, compare_latest_to_previous
 from autotune.database import DEFAULT_DB_PATH, ExperimentDB
 from autotune.recommender import DEFAULT_KNOB, recommend_next
 
@@ -124,6 +124,21 @@ if comparison.best is not None and comparison.latest is not None:
             direction = "higher" if comparison.latency_delta_ms > 0 else "lower"
             parts.append(f"Latency is {abs(comparison.latency_delta_ms):.1f} ms {direction}.")
         st.warning(" ".join(parts))
+
+regression = compare_latest_to_previous(filtered)
+if regression.latest is not None and regression.previous is not None:
+    parts = [f"Latest completed run #{regression.latest.id} vs. immediately preceding run #{regression.previous.id}."]
+    if regression.throughput_delta_pct is not None:
+        direction = "higher" if regression.throughput_delta_pct > 0 else "lower"
+        parts.append(f"Throughput is {abs(regression.throughput_delta_pct):.1f}% {direction}.")
+    if regression.latency_delta_ms is not None:
+        direction = "higher" if regression.latency_delta_ms > 0 else "lower"
+        parts.append(f"Latency is {abs(regression.latency_delta_ms):.1f} ms {direction}.")
+    message = " ".join(parts)
+    if regression.regressed:
+        st.error(f"Regression vs. previous run: {message}")
+    else:
+        st.success(f"No regression vs. previous run: {message}")
 
 completed = df[df["status"] == "completed"].dropna(subset=[knob, "throughput_tokens_per_sec", "latency_ms"])
 if not completed.empty:

@@ -311,6 +311,11 @@ autotune export --format markdown --template pr
 
 Without `--out`, the export prints to the terminal.
 
+The `pr` template includes a Regression Check comparing the latest completed
+run against the completed run immediately before it — a run can regress
+against its immediate predecessor without being the worst run ever recorded,
+which the best/latest comparison alone wouldn't catch.
+
 ## Get a Recommendation
 
 ```bash
@@ -356,7 +361,8 @@ streamlit run dashboard/app.py
 ```
 
 The dashboard reads the local SQLite database and shows experiment history,
-best/latest run comparison, metric charts, and the current recommendation.
+best/latest run comparison, a regression check against the immediately
+preceding run, metric charts, and the current recommendation.
 
 ## Development
 
@@ -391,29 +397,12 @@ production-readiness checks.
 Shipped: one-command demo/ingest/run paths, `cloudai-summary.json` support
 with workload-specific fallbacks, TTFT/runtime/failure-rate budgets, explainable
 runs (intent, metadata, config diffs), issue/PR/benchmark export templates,
-local-first SQLite storage, and clean non-zero-exit failure handling for a
-missing/failing CloudAI binary. Kept local-first by design, not a target with
-an end state — every new item below should keep working with zero services.
-
-### Now — small, scoped, no open design questions
-
-- **Dashboard is missing a runtime budget input.** `Budgets`/`recommend_next()`
-  (`autotune/budgets.py`, `autotune/recommender.py`) already support
-  `runtime_budget_sec`, but `dashboard/app.py`'s sidebar only collects
-  latency, TTFT, throughput, and failure-rate — so the dashboard silently
-  can't apply a budget the CLI already supports. Add the missing sidebar
-  input and thread it through.
-- **No linting in CI.** `.github/workflows/ci.yml` runs tests + `compileall`
-  + a CLI smoke test, but nothing checks style or catches latent bugs
-  (unused imports, shadowing, etc.) before merge. Add `ruff check`/`ruff
-  format --check`, matching the convention `NVIDIA/cloudai` itself already
-  uses — cheap, and keeps the two codebases easier to move between.
-- **Comparison only tracks best-vs-latest, not run-over-run regressions.**
-  `comparison.compare_best_and_latest` compares the newest completed run
-  against the best-ever completed run. A run that regressed against the run
-  immediately before it — but isn't the global worst — never gets flagged.
-  Add a `compare_latest_to_previous` alongside the existing best/latest
-  comparison and surface it in the dashboard and `export`.
+local-first SQLite storage, clean non-zero-exit failure handling for a
+missing/failing CloudAI binary, a dashboard runtime-budget input, `ruff`
+lint/format checks in CI, and run-over-run regression tracking
+(`compare_latest_to_previous`) surfaced in both the dashboard and the `pr`
+export template. Kept local-first by design, not a target with an end state —
+every new item below should keep working with zero services.
 
 ### Next — needs one scoping decision, then bounded work
 

@@ -58,3 +58,17 @@ def test_dashboard_runtime_budget_input_reaches_recommendation(demo_db: Path):
     at.run(timeout=30)
 
     assert not at.exception
+
+
+def test_dashboard_flags_a_regression_against_the_immediately_preceding_run(demo_db: Path):
+    """The batch8 run in demo_db has worse latency than batch4, even though it's
+    still the best throughput run overall — this should surface as a regression
+    against the immediately preceding run, distinct from the best-vs-latest check.
+    """
+    at = AppTest.from_file(DASHBOARD_PATH)
+    at.run(timeout=30)
+    at.sidebar.text_input[0].set_value(str(demo_db))
+    at.run(timeout=30)
+
+    assert not at.exception
+    assert any("Regression vs. previous run" in error.value for error in at.error)

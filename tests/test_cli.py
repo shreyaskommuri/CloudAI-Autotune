@@ -442,8 +442,46 @@ def test_export_writes_pr_markdown_template(tmp_path):
     assert ingest.exit_code == 0
     assert result.exit_code == 0
     assert "## Benchmark Evidence" in result.output
+    assert "### Regression Check" in result.output
+    assert "No prior completed run to compare" in result.output
     assert "### Validation" in result.output
     assert "--template pr" in result.output
+
+
+def test_export_pr_markdown_flags_a_regression_against_the_previous_run(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    runner.invoke(
+        cli,
+        [
+            "ingest",
+            "reports/examples/vllm_batch4.json",
+            "--config",
+            "configs/examples/vllm_batch4.toml",
+            "--db",
+            str(db_path),
+        ],
+    )
+    runner.invoke(
+        cli,
+        [
+            "ingest",
+            "reports/examples/vllm_batch8.json",
+            "--config",
+            "configs/examples/vllm_batch8.toml",
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    result = runner.invoke(
+        cli,
+        ["export", "--db", str(db_path), "--format", "markdown", "--template", "pr"],
+    )
+
+    assert result.exit_code == 0
+    assert "REGRESSED:" in result.output
+    assert "Latency is 100.0 ms higher." in result.output
 
 
 def test_export_rejects_template_for_non_markdown(tmp_path):
