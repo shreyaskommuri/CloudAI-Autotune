@@ -36,6 +36,7 @@ with st.sidebar:
     latency_budget = st.number_input("Latency budget (ms, optional)", min_value=0.0, value=0.0, step=10.0)
     ttft_budget = st.number_input("TTFT budget (ms, optional)", min_value=0.0, value=0.0, step=10.0)
     min_throughput = st.number_input("Min throughput (tok/s, optional)", min_value=0.0, value=0.0, step=10.0)
+    runtime_budget = st.number_input("Runtime budget (sec, optional)", min_value=0.0, value=0.0, step=10.0)
     max_failure_rate = st.number_input("Max failure rate (0-1, optional)", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
 
 if not Path(db_path).exists():
@@ -158,6 +159,7 @@ with ExperimentDB(db_path) as db:
         latency_budget_ms=budget,
         ttft_budget_ms=ttft_budget if ttft_budget > 0 else None,
         min_throughput_tokens_per_sec=min_throughput if min_throughput > 0 else None,
+        runtime_budget_sec=runtime_budget if runtime_budget > 0 else None,
         max_failure_rate=max_failure_rate if max_failure_rate > 0 else None,
     )
 
