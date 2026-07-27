@@ -70,16 +70,16 @@ def test_run_detects_common_summary_report_names(tmp_path):
     cloudai.write_text(
         "#!/bin/sh\n"
         "out=''\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
+        'while [ "$#" -gt 0 ]; do\n'
         "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
         "    shift\n"
-        "    out=\"$1\"\n"
+        '    out="$1"\n'
         "  fi\n"
         "  shift\n"
         "done\n"
-        "dir=$(dirname \"$out\")\n"
-        "mkdir -p \"$dir\"\n"
-        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$dir/summary.json\"\n"
+        'dir=$(dirname "$out")\n'
+        'mkdir -p "$dir"\n'
+        'printf \'{"throughput_tokens_per_sec": 123}\' > "$dir/summary.json"\n'
     )
     cloudai.chmod(0o755)
     runner = CloudAIRunner(cloudai_bin=str(cloudai), runs_dir=tmp_path)
@@ -95,17 +95,17 @@ def test_run_prefers_cloudai_summary_report(tmp_path):
     script.write_text(
         "#!/bin/sh\n"
         "out=''\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
+        'while [ "$#" -gt 0 ]; do\n'
         "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
         "    shift\n"
-        "    out=\"$1\"\n"
+        '    out="$1"\n'
         "  fi\n"
         "  shift\n"
         "done\n"
-        "dir=$(dirname \"$out\")\n"
-        "mkdir -p \"$dir\"\n"
-        "printf '{\"metrics\":{\"throughput_tokens_per_sec\": 123}}' > \"$dir/cloudai-summary.json\"\n"
-        "printf '{\"throughput_tokens_per_sec\": 1}' > \"$dir/summary.json\"\n"
+        'dir=$(dirname "$out")\n'
+        'mkdir -p "$dir"\n'
+        'printf \'{"metrics":{"throughput_tokens_per_sec": 123}}\' > "$dir/cloudai-summary.json"\n'
+        'printf \'{"throughput_tokens_per_sec": 1}\' > "$dir/summary.json"\n'
     )
     script.chmod(0o755)
     runner = CloudAIRunner(cloudai_bin=str(script), runs_dir=tmp_path)
@@ -121,16 +121,16 @@ def test_run_detects_cloudai_summary_in_scenario_output_directory(tmp_path):
     script.write_text(
         "#!/bin/sh\n"
         "out=''\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
+        'while [ "$#" -gt 0 ]; do\n'
         "  if [ \"$1\" = '--output-dir' ]; then\n"
         "    shift\n"
-        "    out=\"$1\"\n"
+        '    out="$1"\n'
         "  fi\n"
         "  shift\n"
         "done\n"
-        "mkdir -p \"$out/scenario_timestamp\"\n"
-        "printf '{\"metrics\":{\"throughput_tokens_per_sec\": 123}}' "
-        "> \"$out/scenario_timestamp/cloudai-summary.json\"\n"
+        'mkdir -p "$out/scenario_timestamp"\n'
+        'printf \'{"metrics":{"throughput_tokens_per_sec": 123}}\' '
+        '> "$out/scenario_timestamp/cloudai-summary.json"\n'
     )
     script.chmod(0o755)
     runner = CloudAIRunner(

@@ -526,9 +526,7 @@ def test_check_supports_ttft_budget(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "demo.db"
     report_path = tmp_path / "report.json"
-    report_path.write_text(
-        '{"throughput_tokens_per_sec": 330, "latency_ms": 160, "ttft_ms": 75}'
-    )
+    report_path.write_text('{"throughput_tokens_per_sec": 330, "latency_ms": 160, "ttft_ms": 75}')
     ingest = runner.invoke(
         cli,
         [
@@ -625,15 +623,15 @@ def test_smoke_cloudai_reports_success_with_fake_cloudai(tmp_path):
     cloudai.write_text(
         "#!/bin/sh\n"
         "out=''\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
+        'while [ "$#" -gt 0 ]; do\n'
         "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
         "    shift\n"
-        "    out=\"$1\"\n"
+        '    out="$1"\n'
         "  fi\n"
         "  shift\n"
         "done\n"
-        "mkdir -p \"$out\"\n"
-        "printf '{\"throughput_tokens_per_sec\": 123}' > \"$out/cloudai-summary.json\"\n"
+        'mkdir -p "$out"\n'
+        'printf \'{"throughput_tokens_per_sec": 123}\' > "$out/cloudai-summary.json"\n'
     )
     cloudai.chmod(0o755)
     system_config = tmp_path / "system.toml"
@@ -675,17 +673,17 @@ def test_smoke_cloudai_rejects_report_without_recognized_metrics(tmp_path):
     cloudai.write_text(
         "#!/bin/sh\n"
         "out=''\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
+        'while [ "$#" -gt 0 ]; do\n'
         "  if [ \"$1\" = '--output' ] || [ \"$1\" = '--output-dir' ]; then\n"
         "    shift\n"
-        "    out=\"$1\"\n"
+        '    out="$1"\n'
         "  fi\n"
         "  shift\n"
         "done\n"
-        "dir=$(dirname \"$out\")\n"
-        "mkdir -p \"$dir\"\n"
-        "printf '{\"scenario\":\"sleep\",\"status\":\"completed\",\"test_runs\":[]}' "
-        "> \"$dir/cloudai-summary.json\"\n"
+        'dir=$(dirname "$out")\n'
+        'mkdir -p "$dir"\n'
+        'printf \'{"scenario":"sleep","status":"completed","test_runs":[]}\' '
+        '> "$dir/cloudai-summary.json"\n'
     )
     cloudai.chmod(0o755)
     runs_dir = tmp_path / "runs"
@@ -756,10 +754,10 @@ def test_run_logs_report_parse_failure_and_marks_experiment_failed(tmp_path, mon
     cloudai.write_text(
         "#!/bin/sh\n"
         "out=''\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
+        'while [ "$#" -gt 0 ]; do\n'
         "  if [ \"$1\" = '--output' ]; then\n"
         "    shift\n"
-        "    out=\"$1\"\n"
+        '    out="$1"\n'
         "  fi\n"
         "  shift\n"
         "done\n"
@@ -796,14 +794,14 @@ def test_run_rejects_report_without_recognized_metrics(tmp_path, monkeypatch):
     cloudai.write_text(
         "#!/bin/sh\n"
         "out=''\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
+        'while [ "$#" -gt 0 ]; do\n'
         "  if [ \"$1\" = '--output' ]; then\n"
         "    shift\n"
-        "    out=\"$1\"\n"
+        '    out="$1"\n'
         "  fi\n"
         "  shift\n"
         "done\n"
-        "printf '{\"scenario\":\"empty\",\"status\":\"completed\",\"test_runs\":[]}' > \"$out\"\n"
+        'printf \'{"scenario":"empty","status":"completed","test_runs":[]}\' > "$out"\n'
     )
     cloudai.chmod(0o755)
     monkeypatch.chdir(tmp_path)

@@ -56,9 +56,7 @@ _JSON_ALIASES: dict[str, tuple[str, ...]] = {
 # Regex fallbacks for free-text logs, e.g. "Throughput: 330.5 tokens/sec".
 _TEXT_PATTERNS: dict[str, re.Pattern[str]] = {
     "latency_ms": re.compile(r"latency[^0-9\-]*([\d.]+)\s*ms", re.IGNORECASE),
-    "throughput_tokens_per_sec": re.compile(
-        r"throughput[^0-9\-]*([\d.]+)\s*tokens?\s*/\s*s(ec)?", re.IGNORECASE
-    ),
+    "throughput_tokens_per_sec": re.compile(r"throughput[^0-9\-]*([\d.]+)\s*tokens?\s*/\s*s(ec)?", re.IGNORECASE),
     "runtime_sec": re.compile(r"runtime[^0-9\-]*([\d.]+)\s*s(ec)?", re.IGNORECASE),
     "failure_rate": re.compile(r"failure[ _-]?rate[^0-9\-]*([\d.]+)", re.IGNORECASE),
     "ttft_ms": re.compile(
