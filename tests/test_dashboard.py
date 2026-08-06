@@ -4,6 +4,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from autotune.database import ExperimentDB
+from autotune.dse import DSETrial
 
 DASHBOARD_PATH = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
 
@@ -72,3 +73,46 @@ def test_dashboard_flags_a_regression_against_the_immediately_preceding_run(demo
 
     assert not at.exception
     assert any("Regression vs. previous run" in error.value for error in at.error)
+
+
+@pytest.fixture()
+def dse_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "dse-test.db"
+    with ExperimentDB(db_path) as db:
+        exp_id = db.add_experiment(
+            scenario="nemo_run_sweep",
+            backend="cloudai-dse",
+            config_path="results/nemo_run_sweep/0/trajectory.csv",
+            config={},
+        )
+        db.add_dse_trials(
+            exp_id,
+            [
+                DSETrial(step=1, action={"batch_size": 1}, reward=0.5, observation=[100.0]),
+                DSETrial(step=2, action={"batch_size": 4}, reward=1.2, observation=[330.0]),
+            ],
+        )
+        db.update_result(exp_id, status="completed", metrics={"best_reward": 1.2, "best_step": 2, "num_trials": 2})
+    return db_path
+
+
+def test_dashboard_shows_dse_sweep_best_reward_and_action(dse_db: Path):
+    at = AppTest.from_file(DASHBOARD_PATH)
+    at.run(timeout=30)
+    at.sidebar.text_input[0].set_value(str(dse_db))
+    at.run(timeout=30)
+
+    assert not at.exception
+    metric_labels = [metric.label for metric in at.main.metric]
+    assert "Best reward" in metric_labels
+
+
+def test_dashboard_hides_dse_section_when_no_sweeps_present(demo_db: Path):
+    at = AppTest.from_file(DASHBOARD_PATH)
+    at.run(timeout=30)
+    at.sidebar.text_input[0].set_value(str(demo_db))
+    at.run(timeout=30)
+
+    assert not at.exception
+    headers = [subheader.value for subheader in at.main.subheader]
+    assert "DSE sweeps" not in headers

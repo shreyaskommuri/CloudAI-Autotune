@@ -944,3 +944,54 @@ def test_run_timeout_is_logged_and_returns_nonzero(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "CloudAI timed out after 0.01 seconds" in result.output
     assert "autotune: CloudAI timed out after 0.01 seconds" in log_path.read_text()
+
+
+def _write_trajectory(results_dir: Path, test_name: str) -> None:
+    trajectory_dir = results_dir / test_name / "0"
+    trajectory_dir.mkdir(parents=True)
+    (trajectory_dir / "trajectory.csv").write_text(
+        "step,action,reward,observation\n1,\"{'batch_size': 1}\",0.5,[100.0]\n2,\"{'batch_size': 4}\",1.2,[330.0]\n"
+    )
+
+
+def test_ingest_dse_records_trials_and_best_reward(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    results_dir = tmp_path / "results"
+    _write_trajectory(results_dir, "nemo_run_sweep")
+
+    result = runner.invoke(cli, ["ingest-dse", str(results_dir), "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "ingested 2 trials" in result.output
+    assert "best reward=1.2 at step 2" in result.output
+
+    listed = runner.invoke(cli, ["list", "--db", str(db_path)])
+    assert listed.exit_code == 0
+    assert "nemo_run_sweep" in listed.output
+    assert "cloudai-dse" in listed.output
+
+
+def test_ingest_dse_uses_explicit_scenario_name(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    results_dir = tmp_path / "results"
+    _write_trajectory(results_dir, "nemo_run_sweep")
+
+    result = runner.invoke(cli, ["ingest-dse", str(results_dir), "--db", str(db_path), "--scenario", "custom_scenario"])
+
+    assert result.exit_code == 0
+    listed = runner.invoke(cli, ["list", "--db", str(db_path)])
+    assert "custom_scenario" in listed.output
+
+
+def test_ingest_dse_reports_when_no_trajectories_found(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    empty_results_dir = tmp_path / "results"
+    empty_results_dir.mkdir()
+
+    result = runner.invoke(cli, ["ingest-dse", str(empty_results_dir), "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "No trajectory.csv files found" in result.output

@@ -411,9 +411,13 @@ local-first SQLite storage, clean non-zero-exit failure handling for a
 missing/failing CloudAI binary, a dashboard runtime-budget input, `ruff`
 lint/format checks in CI, run-over-run regression tracking
 (`compare_latest_to_previous`) surfaced in both the dashboard and the `pr`
-export template, and multi-knob *visibility* via `recommend --all-knobs`
+export template, multi-knob *visibility* via `recommend --all-knobs`
 (discovers every numeric config key seen across completed runs, rather than
-requiring `--knob` per key up front). Kept local-first by design, not a
+requiring `--knob` per key up front), and DSE sweep ingestion/visualization
+(`autotune ingest-dse`), which parses CloudAI's own `trajectory.csv` sweep
+logs (from `cloudai_gym.py`'s grid search) into the same SQLite store and
+dashboard, so a sweep CloudAI already ran can be browsed without
+reimplementing any search logic. Kept local-first by design, not a
 target with an end state — every new item below should keep working with
 zero services.
 
@@ -423,14 +427,8 @@ zero services.
   (not just reporting independent bests) needs a real objective function
   beyond the current throughput/latency ratio, a search-budget model, and a
   decision on whether Autotune should ever suggest untried combinations or
-  stay strictly "next single point from history." Don't start this without
-  agreeing on scope — it's the one item here that's a genuine design
-  project, not a bounded fix.
-- **Consider wrapping CloudAI's own DSE instead of competing with it.**
-  CloudAI already has a working multi-parameter search stack —
-  `cloudai_gym.py`'s Gymnasium env, `GridSearchAgent` and reward-function
-  agents in `cloudai/configurator/`, and `trajectory.csv`/`env.csv` step
-  logs with reward per config. Before building joint search in Autotune
-  (above), it's worth checking whether ingesting and visualizing CloudAI DSE
-  trajectories gets most of the value with far less risk of duplicating
-  logic CloudAI already maintains.
+  stay strictly "next single point from history." CloudAI's own DSE stack is
+  exhaustive grid search only (no smarter strategy exists to lean on), so
+  this is still a from-scratch design question, not something the ingestion
+  work above resolves. Don't start this without agreeing on scope, it's the
+  one item here that's a genuine design project, not a bounded fix.

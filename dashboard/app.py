@@ -166,3 +166,29 @@ with ExperimentDB(db_path) as db:
 
 st.metric(label=f"Suggested next value for `{rec.knob}`", value=str(rec.suggested_value), delta=str(rec.current_value))
 st.write(rec.reason)
+
+dse_experiments = [e for e in filtered if e.backend == "cloudai-dse"]
+if dse_experiments:
+    st.subheader("DSE sweeps")
+    st.caption("Sweeps CloudAI already ran (grid search over swept parameters), ingested via `autotune ingest-dse`.")
+
+    dse_options = {f"#{e.id} {e.scenario} ({e.metrics.get('num_trials', '?')} trials)": e.id for e in dse_experiments}
+    selected_label = st.selectbox("Sweep", options=list(dse_options))
+    selected_id = dse_options[selected_label]
+
+    with ExperimentDB(db_path) as db:
+        trials = db.get_dse_trials(selected_id)
+
+    if trials:
+        trials_df = pd.DataFrame({"step": [t.step for t in trials], "reward": [t.reward for t in trials]})
+        st.line_chart(trials_df.set_index("step")["reward"])
+
+        best = max(trials, key=lambda t: t.reward)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(label="Best reward", value=f"{best.reward:g}", delta=f"step {best.step}")
+        with col2:
+            st.write("Best action")
+            st.json(best.action)
+    else:
+        st.info("No trials stored for this sweep.")

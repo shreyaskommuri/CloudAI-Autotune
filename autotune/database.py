@@ -6,7 +6,10 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .dse import DSETrial
 
 DEFAULT_DB_PATH = Path("autotune.db")
 
@@ -23,6 +26,18 @@ CREATE TABLE IF NOT EXISTS experiments (
     metrics_json TEXT,
     notes TEXT,
     metadata_json TEXT
+);
+"""
+
+DSE_TRIALS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS dse_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
+    step INTEGER NOT NULL,
+    action_json TEXT NOT NULL,
+    reward REAL NOT NULL,
+    observation_json TEXT NOT NULL,
+    UNIQUE(experiment_id, step)
 );
 """
 
@@ -58,6 +73,27 @@ class Experiment:
         )
 
 
+@dataclass
+class DSETrialRow:
+    id: Optional[int]
+    experiment_id: int
+    step: int
+    action: dict[str, Any]
+    reward: float
+    observation: list[Any]
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "DSETrialRow":
+        return cls(
+            id=row["id"],
+            experiment_id=row["experiment_id"],
+            step=row["step"],
+            action=json.loads(row["action_json"]),
+            reward=row["reward"],
+            observation=json.loads(row["observation_json"]),
+        )
+
+
 class ExperimentDB:
     """Thin wrapper around a SQLite database of benchmark experiments."""
 
@@ -66,6 +102,7 @@ class ExperimentDB:
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(SCHEMA)
+        self._conn.execute(DSE_TRIALS_SCHEMA)
         self._ensure_columns()
         self._conn.commit()
 
@@ -145,3 +182,24 @@ class ExperimentDB:
         else:
             rows = self._conn.execute("SELECT * FROM experiments ORDER BY id").fetchall()
         return [Experiment.from_row(row) for row in rows]
+
+    def add_dse_trials(self, experiment_id: int, trials: list[DSETrial]) -> None:
+        """Store DSE trials for an experiment, replacing any trials already stored for it."""
+        self._conn.execute("DELETE FROM dse_trials WHERE experiment_id = ?", (experiment_id,))
+        self._conn.executemany(
+            """
+            INSERT INTO dse_trials (experiment_id, step, action_json, reward, observation_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (experiment_id, trial.step, json.dumps(trial.action), trial.reward, json.dumps(trial.observation))
+                for trial in trials
+            ],
+        )
+        self._conn.commit()
+
+    def get_dse_trials(self, experiment_id: int) -> list[DSETrialRow]:
+        rows = self._conn.execute(
+            "SELECT * FROM dse_trials WHERE experiment_id = ? ORDER BY step", (experiment_id,)
+        ).fetchall()
+        return [DSETrialRow.from_row(row) for row in rows]
