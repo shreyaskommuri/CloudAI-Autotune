@@ -16,6 +16,7 @@ from autotune.budgets import BudgetCheck, Budgets, evaluate_experiment
 from autotune.comparison import RegressionCheck, compare_latest_to_previous
 from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
+from autotune.dse import best_trial, derive_test_name, find_trajectory_files, parse_trajectory
 from autotune.parser import parse_report
 from autotune.recommender import DEFAULT_KNOB, discover_knobs, recommend_next
 from autotune.runner import CloudAIRunner, RunResult
@@ -484,6 +485,50 @@ def ingest(
     )
 
     click.echo(f"[{experiment_id}] ingested {report_path} — {metrics}")
+
+
+@cli.command(name="ingest-dse")
+@click.argument("results_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--db", "db_path", default="autotune.db", help="Path to the experiment database.")
+@click.option(
+    "--scenario",
+    default=None,
+    help="Scenario name to record every ingested sweep under; defaults to each CloudAI test name.",
+)
+def ingest_dse(results_dir: Path, db_path: str, scenario: Optional[str]) -> None:
+    """Ingest CloudAI DSE trajectory.csv files found under a results directory.
+
+    Each trajectory.csv (one per CloudAI test/iteration) becomes one experiment row plus its
+    per-trial rows, so the sweep CloudAI already ran can be browsed and charted in Autotune
+    without re-running or re-implementing the search.
+    """
+    trajectory_paths = find_trajectory_files(results_dir)
+    if not trajectory_paths:
+        click.echo(f"No trajectory.csv files found under {results_dir}.")
+        return
+
+    with ExperimentDB(db_path) as db:
+        for trajectory_path in trajectory_paths:
+            trials = parse_trajectory(trajectory_path)
+            if not trials:
+                continue
+
+            test_name = derive_test_name(trajectory_path)
+            experiment_id = db.add_experiment(
+                scenario=scenario or test_name,
+                backend="cloudai-dse",
+                config_path=str(trajectory_path),
+                config={},
+                status="completed",
+            )
+            db.add_dse_trials(experiment_id, trials)
+
+            best = best_trial(trials)
+            metrics = {"best_reward": best.reward, "best_step": best.step, "num_trials": len(trials)} if best else {}
+            db.update_result(experiment_id, status="completed", report_path=str(trajectory_path), metrics=metrics)
+
+            best_desc = f"best reward={best.reward:g} at step {best.step}" if best else "no trials"
+            click.echo(f"[{experiment_id}] ingested {len(trials)} trials from {trajectory_path} ({best_desc})")
 
 
 @cli.command()

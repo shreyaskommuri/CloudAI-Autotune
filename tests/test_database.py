@@ -1,6 +1,7 @@
 import sqlite3
 
 from autotune.database import ExperimentDB
+from autotune.dse import DSETrial
 
 
 def test_add_and_get_experiment(tmp_path):
@@ -112,5 +113,61 @@ def test_update_result_and_list(tmp_path):
 
         empty = db.list_experiments(scenario="does_not_exist")
         assert empty == []
+    finally:
+        db.close()
+
+
+def test_add_and_get_dse_trials(tmp_path):
+    db = ExperimentDB(tmp_path / "test.db")
+    try:
+        exp_id = db.add_experiment(
+            scenario="nemo_run_sweep",
+            backend="cloudai-dse",
+            config_path="results/nemo_run_sweep/0/trajectory.csv",
+            config={},
+        )
+
+        db.add_dse_trials(
+            exp_id,
+            [
+                DSETrial(step=1, action={"batch_size": 1}, reward=0.5, observation=[100.0]),
+                DSETrial(step=2, action={"batch_size": 4}, reward=1.2, observation=[330.0]),
+            ],
+        )
+
+        trials = db.get_dse_trials(exp_id)
+
+        assert len(trials) == 2
+        assert trials[0].step == 1
+        assert trials[0].action == {"batch_size": 1}
+        assert trials[0].reward == 0.5
+        assert trials[0].observation == [100.0]
+        assert trials[1].step == 2
+    finally:
+        db.close()
+
+
+def test_add_dse_trials_replaces_existing_trials_for_the_experiment(tmp_path):
+    db = ExperimentDB(tmp_path / "test.db")
+    try:
+        exp_id = db.add_experiment(scenario="sweep", backend="cloudai-dse", config_path="x", config={})
+
+        db.add_dse_trials(exp_id, [DSETrial(step=1, action={}, reward=0.1, observation=[])])
+        db.add_dse_trials(exp_id, [DSETrial(step=1, action={}, reward=0.9, observation=[])])
+
+        trials = db.get_dse_trials(exp_id)
+
+        assert len(trials) == 1
+        assert trials[0].reward == 0.9
+    finally:
+        db.close()
+
+
+def test_get_dse_trials_for_experiment_with_no_trials_is_empty(tmp_path):
+    db = ExperimentDB(tmp_path / "test.db")
+    try:
+        exp_id = db.add_experiment(scenario="sweep", backend="cloudai-dse", config_path="x", config={})
+
+        assert db.get_dse_trials(exp_id) == []
     finally:
         db.close()
