@@ -369,6 +369,83 @@ def test_recommend_joint_with_no_completed_experiments(tmp_path):
     assert "No completed" in result.output
 
 
+def test_recommend_explore_requires_joint(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["recommend", "--db", str(tmp_path / "demo.db"), "--knob", "serving.batch_size", "--explore"],
+    )
+
+    assert result.exit_code != 0
+    assert "--explore requires --joint" in result.output
+
+
+def test_recommend_explore_suggests_an_untried_combo(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+
+    _ingest_combo(runner, db_path, 1, 100, "reports/examples/vllm_batch1.json")
+    _ingest_combo(runner, db_path, 4, 100, "reports/examples/vllm_batch4.json")
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+            "--explore",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Explore reason:" in result.output
+    assert "Suggested untried combo:" in result.output
+
+
+def test_recommend_explore_writes_suggested_combo_not_best_combo(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    out_config = tmp_path / "explore.toml"
+
+    _ingest_combo(runner, db_path, 1, 100, "reports/examples/vllm_batch1.json")
+    _ingest_combo(runner, db_path, 4, 100, "reports/examples/vllm_batch4.json")
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+            "--explore",
+            "--derive-from",
+            "configs/examples/vllm_baseline.toml",
+            "--out-config",
+            str(out_config),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"Wrote suggested config to {out_config}" in result.output
+    written = config_mutator.load_config(out_config)
+    # batch_size=8 is untried (never run with num_requests=100), unlike the best combo (4).
+    assert written["serving"]["batch_size"] != 4.0
+
+
 def test_ingest_records_notes_for_experiment_context(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "demo.db"
