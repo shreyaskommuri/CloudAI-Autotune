@@ -1,10 +1,18 @@
 """Suggest the next benchmark config to try based on prior experiment history.
 
-Heuristic (v1, MVP): track a single tunable knob (default `serving.batch_size`)
-across completed runs. If throughput is still climbing faster than latency is
-degrading (i.e. the tokens/sec-per-ms-of-latency ratio is improving or stable),
-recommend doubling the knob; otherwise recommend backing off to the best
-observed tradeoff point.
+Three heuristics, in increasing order of scope:
+
+- `recommend_next`: track a single tunable knob (default `serving.batch_size`)
+  across completed runs. If throughput is still climbing faster than latency is
+  degrading (i.e. the tokens/sec-per-ms-of-latency ratio is improving or stable),
+  recommend doubling the knob; otherwise recommend backing off to the best
+  observed tradeoff point.
+- `recommend_joint`: the same idea across two or more knobs looked at *together*
+  instead of independently. Reports the best combination tried so far plus the
+  Pareto frontier, it does not suggest untried combinations.
+- `suggest_untried_combo`: extends `recommend_joint`'s best combo by one knob at
+  a time, reusing `recommend_next`'s trend logic per knob rather than a new
+  search algorithm. Stateless, one suggestion per call.
 
 Budget policy reuses `autotune.budgets`: any run that fails a configured
 latency, TTFT, throughput, runtime, or failure-rate budget is excluded from
@@ -296,7 +304,7 @@ def recommend_joint(
     combos = _combos_from_completed(completed, knobs)
     best = max(combos, key=lambda c: c.efficiency)
     frontier = _pareto_frontier(combos)
-    combo_desc = ", ".join(f"{k}={v:g}" for k, v in best.values.items())
+    combo_desc = format_combo(best.values)
 
     return JointRecommendation(
         knobs=list(knobs),
@@ -382,6 +390,10 @@ def suggest_untried_combo(
     # recommend_next's marker for that case); otherwise fall back to any knob with a suggestion.
     preferred = [k for k in knobs if "outpaced" in per_knob[k].reason]
     candidate_order = list(dict.fromkeys(preferred + knobs))
+    combo_desc = format_combo(joint.best.values)
+    best_desc = (
+        f"Best combo tried so far is {combo_desc} ({joint.best.throughput:.0f} tok/s @ {joint.best.latency:.0f}ms)."
+    )
 
     for knob in candidate_order:
         suggested_value = per_knob[knob].suggested_value
@@ -391,29 +403,21 @@ def suggest_untried_combo(
         candidate[knob] = suggested_value
         if tuple(candidate[k] for k in knobs) in tried_values:
             continue
-        combo_desc = ", ".join(f"{k}={v:g}" for k, v in joint.best.values.items())
         return ExploreRecommendation(
             knobs=list(knobs),
             best=joint.best,
             suggested=candidate,
             reason=(
-                f"Best combo tried so far is {combo_desc} "
-                f"({joint.best.throughput:.0f} tok/s @ {joint.best.latency:.0f}ms). "
-                f"Exploring by adjusting {knob} to {suggested_value:g} ({per_knob[knob].reason}), "
-                "holding the other knob(s) at the best combo's values."
+                f"{best_desc} Exploring by adjusting {knob} to {suggested_value:g} "
+                f"({per_knob[knob].reason}), holding the other knob(s) at the best combo's values."
             ),
         )
 
-    combo_desc = ", ".join(f"{k}={v:g}" for k, v in joint.best.values.items())
     return ExploreRecommendation(
         knobs=list(knobs),
         best=joint.best,
         suggested=None,
-        reason=(
-            f"Best combo tried so far is {combo_desc} "
-            f"({joint.best.throughput:.0f} tok/s @ {joint.best.latency:.0f}ms). "
-            "No untried direction could be suggested for any knob from the current data."
-        ),
+        reason=f"{best_desc} No untried direction could be suggested for any knob from the current data.",
     )
 
 
@@ -449,6 +453,11 @@ def _combos_from_completed(completed: list[Experiment], knobs: list[str]) -> lis
         )
         for key, exp in combos_by_values.items()
     ]
+
+
+def format_combo(values: dict[str, float]) -> str:
+    """Render a knob-value combo as `k1=v1, k2=v2`, used in both reasons and CLI output."""
+    return ", ".join(f"{k}={v:g}" for k, v in values.items())
 
 
 def _pareto_frontier(combos: list[ComboResult]) -> list[ComboResult]:

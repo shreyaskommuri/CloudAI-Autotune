@@ -18,7 +18,14 @@ from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
 from autotune.dse import best_trial, derive_test_name, find_trajectory_files, parse_trajectory
 from autotune.parser import parse_report
-from autotune.recommender import DEFAULT_KNOB, discover_knobs, recommend_joint, recommend_next, suggest_untried_combo
+from autotune.recommender import (
+    DEFAULT_KNOB,
+    discover_knobs,
+    format_combo,
+    recommend_joint,
+    recommend_next,
+    suggest_untried_combo,
+)
 from autotune.runner import CloudAIRunner, RunResult
 
 DEMO_REPORTS = (
@@ -607,6 +614,63 @@ def _ingest_config(
     }
 
 
+def _echo_joint_recommendation(
+    experiments: list[Experiment],
+    knobs: list[str],
+    explore: bool,
+    latency_budget_ms: Optional[float],
+    ttft_budget_ms: Optional[float],
+    min_throughput_tokens_per_sec: Optional[float],
+    runtime_budget_sec: Optional[float],
+    max_failure_rate: Optional[float],
+    derive_from: Optional[Path],
+    out_config: Optional[Path],
+) -> None:
+    joint_rec = recommend_joint(
+        experiments,
+        knobs=knobs,
+        latency_budget_ms=latency_budget_ms,
+        ttft_budget_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_budget_sec=runtime_budget_sec,
+        max_failure_rate=max_failure_rate,
+    )
+    click.echo(f"Knobs: {', '.join(joint_rec.knobs)}")
+    click.echo(f"Reason: {joint_rec.reason}")
+    if joint_rec.best is not None:
+        best_desc = format_combo(joint_rec.best.values)
+        click.echo(f"Best combo: {best_desc} ({joint_rec.best.throughput:.0f} tok/s @ {joint_rec.best.latency:.0f}ms)")
+        for combo in joint_rec.frontier:
+            if combo is joint_rec.best:
+                continue
+            combo_desc = format_combo(combo.values)
+            click.echo(f"Frontier: {combo_desc} ({combo.throughput:.0f} tok/s @ {combo.latency:.0f}ms)")
+
+    combo_to_write = joint_rec.best.values if joint_rec.best is not None else None
+
+    if explore:
+        explore_rec = suggest_untried_combo(
+            experiments,
+            knobs=knobs,
+            latency_budget_ms=latency_budget_ms,
+            ttft_budget_ms=ttft_budget_ms,
+            min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+            runtime_budget_sec=runtime_budget_sec,
+            max_failure_rate=max_failure_rate,
+        )
+        click.echo(f"Explore reason: {explore_rec.reason}")
+        if explore_rec.suggested is not None:
+            click.echo(f"Suggested untried combo: {format_combo(explore_rec.suggested)}")
+            combo_to_write = explore_rec.suggested
+
+    if derive_from is not None and out_config is not None:
+        if combo_to_write is None:
+            click.echo("No combo available; derived config not written.")
+            return
+        written = config_mutator.derive_config(derive_from, combo_to_write, out_config)
+        click.echo(f"Wrote suggested config to {written}")
+
+
 @cli.command()
 @click.option("--db", "db_path", default="autotune.db")
 @click.option("--scenario", default=None, help="Restrict recommendation to one scenario's history.")
@@ -707,52 +771,18 @@ def recommend(
         knobs = knobs or (DEFAULT_KNOB,)
 
     if joint:
-        joint_rec = recommend_joint(
+        _echo_joint_recommendation(
             experiments,
             knobs=list(knobs),
+            explore=explore,
             latency_budget_ms=latency_budget_ms,
             ttft_budget_ms=ttft_budget_ms,
             min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
             runtime_budget_sec=runtime_budget_sec,
             max_failure_rate=max_failure_rate,
+            derive_from=derive_from,
+            out_config=out_config,
         )
-        click.echo(f"Knobs: {', '.join(joint_rec.knobs)}")
-        click.echo(f"Reason: {joint_rec.reason}")
-        if joint_rec.best is not None:
-            best_desc = ", ".join(f"{k}={v:g}" for k, v in joint_rec.best.values.items())
-            click.echo(
-                f"Best combo: {best_desc} ({joint_rec.best.throughput:.0f} tok/s @ {joint_rec.best.latency:.0f}ms)"
-            )
-            for combo in joint_rec.frontier:
-                if combo is joint_rec.best:
-                    continue
-                combo_desc = ", ".join(f"{k}={v:g}" for k, v in combo.values.items())
-                click.echo(f"Frontier: {combo_desc} ({combo.throughput:.0f} tok/s @ {combo.latency:.0f}ms)")
-
-        combo_to_write = joint_rec.best.values if joint_rec.best is not None else None
-
-        if explore:
-            explore_rec = suggest_untried_combo(
-                experiments,
-                knobs=list(knobs),
-                latency_budget_ms=latency_budget_ms,
-                ttft_budget_ms=ttft_budget_ms,
-                min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
-                runtime_budget_sec=runtime_budget_sec,
-                max_failure_rate=max_failure_rate,
-            )
-            click.echo(f"Explore reason: {explore_rec.reason}")
-            if explore_rec.suggested is not None:
-                suggested_desc = ", ".join(f"{k}={v:g}" for k, v in explore_rec.suggested.items())
-                click.echo(f"Suggested untried combo: {suggested_desc}")
-                combo_to_write = explore_rec.suggested
-
-        if derive_from is not None and out_config is not None:
-            if combo_to_write is None:
-                click.echo("No combo available; derived config not written.")
-                return
-            written = config_mutator.derive_config(derive_from, combo_to_write, out_config)
-            click.echo(f"Wrote suggested config to {written}")
         return
 
     recommendations = [
