@@ -21,6 +21,7 @@ latency, TTFT, throughput, runtime, or failure-rate budget is excluded from
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -366,25 +367,16 @@ def suggest_untried_combo(
 
     completed = _completed_for_knobs(experiments, knobs, budgets)
     tried_values = {tuple(_knob_value(exp, knob) for knob in knobs) for exp in completed}
-
-    # Isolate each knob's marginal trend by only looking at experiments that match the best
-    # combo on every *other* knob — otherwise recommend_next's "latest vs. previous" trend
-    # can compare two runs that actually differ on a different knob, not this one.
-    per_knob: dict[str, Recommendation] = {}
-    for knob in knobs:
-        other_knobs = [k for k in knobs if k != knob]
-        isolated = [
-            e for e in experiments if all(_knob_value(e, other) == joint.best.values[other] for other in other_knobs)
-        ]
-        per_knob[knob] = recommend_next(
-            isolated,
-            knob=knob,
-            latency_budget_ms=latency_budget_ms,
-            ttft_budget_ms=ttft_budget_ms,
-            min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
-            runtime_budget_sec=runtime_budget_sec,
-            max_failure_rate=max_failure_rate,
-        )
+    per_knob = _isolated_per_knob_recommendations(
+        experiments,
+        knobs,
+        joint.best.values,
+        latency_budget_ms=latency_budget_ms,
+        ttft_budget_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_budget_sec=runtime_budget_sec,
+        max_failure_rate=max_failure_rate,
+    )
 
     # Prefer a knob whose independent trend still looks like it's scaling well ("outpaced" is
     # recommend_next's marker for that case); otherwise fall back to any knob with a suggestion.
@@ -419,6 +411,193 @@ def suggest_untried_combo(
         suggested=None,
         reason=f"{best_desc} No untried direction could be suggested for any knob from the current data.",
     )
+
+
+DEFAULT_SEARCH_NEIGHBORHOOD_CAP = 20
+
+
+def suggest_joint_step(
+    experiments: list[Experiment],
+    knobs: list[str],
+    latency_budget_ms: Optional[float] = None,
+    ttft_budget_ms: Optional[float] = None,
+    min_throughput_tokens_per_sec: Optional[float] = None,
+    runtime_budget_sec: Optional[float] = None,
+    max_failure_rate: Optional[float] = None,
+    max_candidates: int = DEFAULT_SEARCH_NEIGHBORHOOD_CAP,
+) -> ExploreRecommendation:
+    """Suggest one untried combination, allowed to move two or more knobs at once.
+
+    Unlike `suggest_untried_combo` (which only ever perturbs one knob), this considers a
+    bounded neighborhood around the best combo: for each knob, an "up" and a "down" untried
+    candidate value, combined across all knobs. Each combo in the neighborhood is scored by
+    how many knobs land on that knob's independently promising direction (from the same
+    isolated `recommend_next` trend `suggest_untried_combo` uses), preferring fewer
+    simultaneous changes as a tiebreak. No real efficiency exists for untried combos, so this
+    heuristic score is a proxy, not a measurement. The neighborhood is capped at
+    `max_candidates` combos to stay bounded as the number of knobs grows.
+    """
+    budgets = Budgets(
+        latency_ms=latency_budget_ms,
+        ttft_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_sec=runtime_budget_sec,
+        failure_rate=max_failure_rate,
+    )
+
+    joint = recommend_joint(
+        experiments,
+        knobs=knobs,
+        latency_budget_ms=latency_budget_ms,
+        ttft_budget_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_budget_sec=runtime_budget_sec,
+        max_failure_rate=max_failure_rate,
+    )
+    if joint.best is None:
+        return ExploreRecommendation(knobs=list(knobs), best=None, suggested=None, reason=joint.reason)
+
+    completed = _completed_for_knobs(experiments, knobs, budgets)
+    tried_values = {tuple(_knob_value(exp, knob) for knob in knobs) for exp in completed}
+    per_knob = _isolated_per_knob_recommendations(
+        experiments,
+        knobs,
+        joint.best.values,
+        latency_budget_ms=latency_budget_ms,
+        ttft_budget_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_budget_sec=runtime_budget_sec,
+        max_failure_rate=max_failure_rate,
+    )
+    combo_desc = format_combo(joint.best.values)
+    best_desc = (
+        f"Best combo tried so far is {combo_desc} ({joint.best.throughput:.0f} tok/s @ {joint.best.latency:.0f}ms)."
+    )
+
+    # Per knob: an isolated "up" and "down" untried candidate value, plus which direction (if
+    # either) recommend_next's isolated trend actually favors.
+    isolated_tried: dict[str, set[Optional[float]]] = {}
+    for knob in knobs:
+        other_knobs = [k for k in knobs if k != knob]
+        isolated_tried[knob] = {
+            _knob_value(e, knob)
+            for e in experiments
+            if all(_knob_value(e, other) == joint.best.values[other] for other in other_knobs)
+        }
+
+    up: dict[str, Optional[float]] = {}
+    down: dict[str, Optional[float]] = {}
+    promising_up: dict[str, Optional[bool]] = {}
+    for knob in knobs:
+        current = joint.best.values[knob]
+        up[knob] = _next_higher_untried(current, isolated_tried[knob])
+        down[knob] = _next_lower_untried(current, isolated_tried[knob])
+        suggested_value = per_knob[knob].suggested_value
+        if suggested_value is None or suggested_value == current:
+            promising_up[knob] = None
+        else:
+            promising_up[knob] = suggested_value > current
+
+    neighborhood: list[dict[str, float]] = []
+    for choices in itertools.product(("current", "up", "down"), repeat=len(knobs)):
+        if all(choice == "current" for choice in choices):
+            continue  # the best combo itself, not a new suggestion
+        candidate: dict[str, float] = {}
+        skip = False
+        for knob, choice in zip(knobs, choices, strict=True):
+            if choice == "current":
+                candidate[knob] = joint.best.values[knob]
+            elif choice == "up":
+                if up[knob] is None:
+                    skip = True
+                    break
+                candidate[knob] = up[knob]
+            else:
+                if down[knob] is None:
+                    skip = True
+                    break
+                candidate[knob] = down[knob]
+        if skip:
+            continue
+        if tuple(candidate[k] for k in knobs) in tried_values:
+            continue
+        neighborhood.append(candidate)
+
+    if not neighborhood:
+        return ExploreRecommendation(
+            knobs=list(knobs),
+            best=joint.best,
+            suggested=None,
+            reason=f"{best_desc} No untried combination could be suggested in the local neighborhood.",
+        )
+
+    def score(candidate: dict[str, float]) -> tuple[int, int]:
+        alignment = 0
+        changed = 0
+        for knob in knobs:
+            if candidate[knob] == joint.best.values[knob]:
+                continue
+            changed += 1
+            moved_up = candidate[knob] > joint.best.values[knob]
+            if promising_up[knob] is not None and promising_up[knob] == moved_up:
+                alignment += 1
+            elif promising_up[knob] is not None:
+                alignment -= 1
+        return (alignment, -changed)
+
+    # Score every candidate (cheap even for a full neighborhood), sort best-first, then cap —
+    # capping before scoring could arbitrarily drop the best candidate depending on iteration
+    # order, which isn't meaningful here.
+    neighborhood.sort(key=score, reverse=True)
+    total_considered = len(neighborhood)
+    neighborhood = neighborhood[:max_candidates]
+    best_candidate = neighborhood[0]
+    changed_knobs = [k for k in knobs if best_candidate[k] != joint.best.values[k]]
+    changes_desc = ", ".join(
+        f"{k} {joint.best.values[k]:g}->{best_candidate[k]:g} "
+        f"({'matches' if promising_up.get(k) == (best_candidate[k] > joint.best.values[k]) else 'against'} "
+        "its own isolated trend)"
+        for k in changed_knobs
+    )
+
+    return ExploreRecommendation(
+        knobs=list(knobs),
+        best=joint.best,
+        suggested=best_candidate,
+        reason=(
+            f"{best_desc} Considered {total_considered} untried combo(s) in the local neighborhood "
+            f"(kept top {len(neighborhood)}). Best candidate changes {changes_desc}."
+        ),
+    )
+
+
+def _isolated_per_knob_recommendations(
+    experiments: list[Experiment],
+    knobs: list[str],
+    best_values: dict[str, float],
+    latency_budget_ms: Optional[float] = None,
+    ttft_budget_ms: Optional[float] = None,
+    min_throughput_tokens_per_sec: Optional[float] = None,
+    runtime_budget_sec: Optional[float] = None,
+    max_failure_rate: Optional[float] = None,
+) -> dict[str, Recommendation]:
+    """Isolate each knob's marginal trend to experiments matching `best_values` on every
+    *other* knob — otherwise recommend_next's "latest vs. previous" trend can compare two runs
+    that actually differ on a different knob, not the one being isolated."""
+    per_knob: dict[str, Recommendation] = {}
+    for knob in knobs:
+        other_knobs = [k for k in knobs if k != knob]
+        isolated = [e for e in experiments if all(_knob_value(e, other) == best_values[other] for other in other_knobs)]
+        per_knob[knob] = recommend_next(
+            isolated,
+            knob=knob,
+            latency_budget_ms=latency_budget_ms,
+            ttft_budget_ms=ttft_budget_ms,
+            min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+            runtime_budget_sec=runtime_budget_sec,
+            max_failure_rate=max_failure_rate,
+        )
+    return per_knob
 
 
 def _completed_for_knobs(experiments: list[Experiment], knobs: list[str], budgets: Budgets) -> list[Experiment]:

@@ -20,10 +20,12 @@ from autotune.dse import best_trial, derive_test_name, find_trajectory_files, pa
 from autotune.parser import parse_report
 from autotune.recommender import (
     DEFAULT_KNOB,
+    DEFAULT_SEARCH_NEIGHBORHOOD_CAP,
     discover_knobs,
     format_combo,
     recommend_joint,
     recommend_next,
+    suggest_joint_step,
     suggest_untried_combo,
 )
 from autotune.runner import CloudAIRunner, RunResult
@@ -618,6 +620,8 @@ def _echo_joint_recommendation(
     experiments: list[Experiment],
     knobs: list[str],
     explore: bool,
+    search: bool,
+    max_candidates: int,
     latency_budget_ms: Optional[float],
     ttft_budget_ms: Optional[float],
     min_throughput_tokens_per_sec: Optional[float],
@@ -663,6 +667,22 @@ def _echo_joint_recommendation(
             click.echo(f"Suggested untried combo: {format_combo(explore_rec.suggested)}")
             combo_to_write = explore_rec.suggested
 
+    if search:
+        search_rec = suggest_joint_step(
+            experiments,
+            knobs=knobs,
+            latency_budget_ms=latency_budget_ms,
+            ttft_budget_ms=ttft_budget_ms,
+            min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+            runtime_budget_sec=runtime_budget_sec,
+            max_failure_rate=max_failure_rate,
+            max_candidates=max_candidates,
+        )
+        click.echo(f"Search reason: {search_rec.reason}")
+        if search_rec.suggested is not None:
+            click.echo(f"Suggested untried combo: {format_combo(search_rec.suggested)}")
+            combo_to_write = search_rec.suggested
+
     if derive_from is not None and out_config is not None:
         if combo_to_write is None:
             click.echo("No combo available; derived config not written.")
@@ -694,6 +714,21 @@ def _echo_joint_recommendation(
     "--explore",
     is_flag=True,
     help="With --joint, also suggest one untried combination extending the best combo found.",
+)
+@click.option(
+    "--search",
+    is_flag=True,
+    help=(
+        "With --joint, suggest one untried combination that may change two or more knobs at "
+        "once, instead of --explore's one-knob-at-a-time step."
+    ),
+)
+@click.option(
+    "--max-candidates",
+    type=int,
+    default=DEFAULT_SEARCH_NEIGHBORHOOD_CAP,
+    show_default=True,
+    help="With --search, cap on how many untried combos in the local neighborhood to consider.",
 )
 @click.option("--latency-budget-ms", type=float, default=None, help="Maximum acceptable latency in ms.")
 @click.option(
@@ -739,6 +774,8 @@ def recommend(
     all_knobs: bool,
     joint: bool,
     explore: bool,
+    search: bool,
+    max_candidates: int,
     latency_budget_ms: Optional[float],
     ttft_budget_ms: Optional[float],
     min_throughput_tokens_per_sec: Optional[float],
@@ -758,6 +795,10 @@ def recommend(
         raise click.UsageError("--joint needs at least two --knob values.")
     if explore and not joint:
         raise click.UsageError("--explore requires --joint.")
+    if search and not joint:
+        raise click.UsageError("--search requires --joint.")
+    if search and explore:
+        raise click.UsageError("--search and --explore cannot be used together.")
 
     with ExperimentDB(db_path) as db:
         experiments = db.list_experiments(scenario=scenario)
@@ -775,6 +816,8 @@ def recommend(
             experiments,
             knobs=list(knobs),
             explore=explore,
+            search=search,
+            max_candidates=max_candidates,
             latency_budget_ms=latency_budget_ms,
             ttft_budget_ms=ttft_budget_ms,
             min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,

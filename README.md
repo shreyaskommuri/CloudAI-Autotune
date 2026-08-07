@@ -401,11 +401,30 @@ repeating a combo you've already run.
 
 There's no separate "search budget" to configure: like every other Autotune
 recommendation, this is one suggestion per call, run it, ingest the result,
-call `recommend --joint --explore` again for the next one. Suggesting
-combinations with a real search strategy beyond this simple, explainable
-heuristic is a bigger, still-undecided feature tracked in the Roadmap section
-below. `--derive-from`/`--out-config` write the exploration suggestion (or the
-best combo, if `--explore` finds nothing new) into a new config.
+call `recommend --joint --explore` again for the next one. `--derive-from`/
+`--out-config` write the exploration suggestion (or the best combo, if
+`--explore` finds nothing new) into a new config.
+
+`--explore` only ever changes one knob per suggestion. To let a suggestion
+change two or more knobs *at once*, use `--search` instead (mutually exclusive
+with `--explore`, also requires `--joint`):
+
+```bash
+autotune recommend \
+  --knob serving.batch_size \
+  --knob serving.num_requests \
+  --joint --search
+```
+
+This considers a bounded neighborhood around the best combo, one step up and
+one step down per knob, combined across all knobs, capped at `--max-candidates`
+(default 20) to stay bounded as the number of knobs grows. Since there's no
+real efficiency measurement for a combo that's never been run, each untried
+candidate is scored by how many knobs land on that knob's own independently
+promising direction (the same isolated trend `--explore` uses per knob),
+preferring fewer simultaneous changes as a tiebreak. It's still a heuristic
+proxy, not a measurement, and it's still one suggestion per call with no
+separate search-budget state.
 
 ## Ingest DSE Sweeps
 
@@ -485,20 +504,27 @@ independently), and joint multi-knob *exploration* via `recommend --joint
 --explore` (suggests one untried combination by extending the best combo on
 whichever knob's own trend still looks like it's scaling well, reusing the
 same doubling/halving heuristic already used for a single knob rather than a
-new search algorithm). Kept local-first by design, not a target with an end
-state — every new item below should keep working with zero services.
+new search algorithm), and multi-knob *joint search* via `recommend --joint
+--search` (suggests one untried combination that may change two or more knobs
+at once, scoring a bounded, capped neighborhood by how many knobs land on
+their own independently promising direction, still a heuristic proxy since
+untried combos have no real measurement to rank by). Kept local-first by
+design, not a target with an end state — every new item below should keep
+working with zero services.
 
 ### Later — needs your input before any code gets written
 
-- **A real multi-knob search strategy.** `recommend --joint --explore`
-  suggests one untried point by extending the best combo along a single knob
-  at a time with the existing doubling/halving heuristic, it does not do
-  genuine joint search (evaluating combinations as combinations, backtracking
-  when a direction stalls, or trading off multiple promising knobs against
-  each other at once). A real version of this needs an objective function
-  beyond the current throughput/latency ratio, a decision on how aggressively
-  to explore versus stay close to known-good points, and possibly a different
-  scoring approach entirely for higher-dimensional knob spaces. CloudAI's own
-  DSE stack is exhaustive grid search only (no smarter strategy exists to
-  lean on), so this is still a from-scratch design question. Don't start this
-  without agreeing on scope.
+- **A learned or measurement-driven search strategy.** `recommend --joint
+  --search` picks among a *heuristic* neighborhood, it never actually runs
+  anything, so its ranking is a proxy built from independent per-knob trends,
+  not a real objective function fit to observed data, and it doesn't
+  backtrack: a suggestion that turns out to make things worse doesn't change
+  future suggestions beyond however that new data point shifts the per-knob
+  trends. A real version of this needs an actual objective function (e.g. a
+  fitted response surface, not the current throughput/latency ratio), a
+  decision on how aggressively to explore versus stay close to known-good
+  points, and a way to use the outcome of a suggestion to inform the next one
+  beyond recomputing independent trends from scratch. CloudAI's own DSE stack
+  is exhaustive grid search only (no smarter strategy exists to lean on), so
+  this is still a from-scratch design question. Don't start this without
+  agreeing on scope.
