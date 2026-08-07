@@ -238,6 +238,137 @@ def test_recommend_all_knobs_with_no_completed_experiments(tmp_path):
     assert "No completed experiments with numeric config values found." in result.output
 
 
+def _ingest_combo(runner, db_path, batch_size, num_requests, report):
+    result = runner.invoke(
+        cli,
+        [
+            "ingest",
+            report,
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--backend",
+            "vllm",
+            "--set",
+            f"serving.batch_size={batch_size}",
+            "--set",
+            f"serving.num_requests={num_requests}",
+        ],
+    )
+    assert result.exit_code == 0
+
+
+def test_recommend_joint_reports_best_combo_and_frontier(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+
+    _ingest_combo(runner, db_path, 1, 100, "reports/examples/vllm_batch1.json")
+    _ingest_combo(runner, db_path, 4, 200, "reports/examples/vllm_batch4.json")
+    _ingest_combo(runner, db_path, 8, 400, "reports/examples/vllm_batch8.json")
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Best combo:" in result.output
+    assert "serving.batch_size=" in result.output
+    assert "serving.num_requests=" in result.output
+
+
+def test_recommend_joint_can_write_best_combo_to_a_config(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    out_config = tmp_path / "joint.toml"
+
+    _ingest_combo(runner, db_path, 1, 100, "reports/examples/vllm_batch1.json")
+    _ingest_combo(runner, db_path, 4, 200, "reports/examples/vllm_batch4.json")
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+            "--derive-from",
+            "configs/examples/vllm_baseline.toml",
+            "--out-config",
+            str(out_config),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"Wrote suggested config to {out_config}" in result.output
+    written = config_mutator.load_config(out_config)
+    assert written["serving"]["batch_size"] == 4.0
+    assert written["serving"]["num_requests"] == 200.0
+
+
+def test_recommend_joint_requires_at_least_two_knobs(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["recommend", "--db", str(tmp_path / "demo.db"), "--knob", "serving.batch_size", "--joint"],
+    )
+
+    assert result.exit_code != 0
+    assert "--joint needs at least two --knob values" in result.output
+
+
+def test_recommend_joint_rejects_all_knobs_combined(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["recommend", "--db", str(tmp_path / "demo.db"), "--all-knobs", "--joint"],
+    )
+
+    assert result.exit_code != 0
+    assert "--joint and --all-knobs cannot be used together" in result.output
+
+
+def test_recommend_joint_with_no_completed_experiments(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(tmp_path / "demo.db"),
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "No completed" in result.output
+
+
 def test_ingest_records_notes_for_experiment_context(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "demo.db"

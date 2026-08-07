@@ -1,5 +1,7 @@
+import pytest
+
 from autotune.database import Experiment
-from autotune.recommender import discover_knobs, recommend_next
+from autotune.recommender import discover_knobs, recommend_joint, recommend_next
 
 
 def _exp(id_, batch_size, throughput, latency, status="completed", **extra_metrics):
@@ -225,3 +227,118 @@ def test_discover_knobs_ignores_incomplete_runs():
 
 def test_discover_knobs_with_no_experiments():
     assert discover_knobs([]) == []
+
+
+def _combo_exp(id_, batch_size, num_requests, throughput, latency, status="completed"):
+    return Experiment(
+        id=id_,
+        created_at="2026-01-01",
+        scenario="vllm_baseline",
+        backend="vllm",
+        config_path=f"cfg_{id_}.toml",
+        config={"serving": {"batch_size": batch_size, "num_requests": num_requests}},
+        status=status,
+        metrics={"throughput_tokens_per_sec": throughput, "latency_ms": latency},
+    )
+
+
+def test_recommend_joint_requires_at_least_two_knobs():
+    with pytest.raises(ValueError, match="at least two knobs"):
+        recommend_joint([], knobs=["serving.batch_size"])
+
+
+def test_recommend_joint_with_no_experiments():
+    rec = recommend_joint([], knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is None
+    assert rec.frontier == []
+    assert "No completed" in rec.reason
+
+
+def test_recommend_joint_picks_best_combo_by_efficiency():
+    experiments = [
+        _combo_exp(1, 1, 100, throughput=120, latency=90),
+        _combo_exp(2, 4, 200, throughput=330, latency=160),
+        _combo_exp(3, 8, 400, throughput=430, latency=260),
+    ]
+
+    rec = recommend_joint(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is not None
+    assert rec.best.values == {"serving.batch_size": 4, "serving.num_requests": 200}
+
+
+def test_recommend_joint_deduplicates_repeated_combos_keeping_latest():
+    experiments = [
+        _combo_exp(1, 4, 200, throughput=300, latency=150),
+        _combo_exp(2, 4, 200, throughput=330, latency=160),
+    ]
+
+    rec = recommend_joint(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is not None
+    assert rec.best.experiment_id == 2
+    assert rec.best.throughput == 330
+
+
+def test_recommend_joint_frontier_excludes_dominated_combos():
+    experiments = [
+        _combo_exp(1, 1, 100, throughput=100, latency=200),  # beaten on both axes by combo 2
+        _combo_exp(2, 4, 200, throughput=300, latency=150),  # lower latency, real tradeoff vs combo 3
+        _combo_exp(3, 8, 400, throughput=400, latency=180),  # higher throughput, real tradeoff vs combo 2
+    ]
+
+    rec = recommend_joint(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    frontier_values = [combo.values for combo in rec.frontier]
+    assert {"serving.batch_size": 1, "serving.num_requests": 100} not in frontier_values
+    assert {"serving.batch_size": 4, "serving.num_requests": 200} in frontier_values
+    assert {"serving.batch_size": 8, "serving.num_requests": 400} in frontier_values
+
+
+def test_recommend_joint_frontier_keeps_real_tradeoffs():
+    experiments = [
+        _combo_exp(1, 4, 200, throughput=300, latency=120),  # lower latency, lower throughput
+        _combo_exp(2, 8, 400, throughput=430, latency=260),  # higher throughput, higher latency
+    ]
+
+    rec = recommend_joint(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert len(rec.frontier) == 2
+
+
+def test_recommend_joint_respects_latency_budget():
+    experiments = [
+        _combo_exp(1, 4, 200, throughput=300, latency=150),
+        _combo_exp(2, 8, 400, throughput=430, latency=260),  # breaches budget
+    ]
+
+    rec = recommend_joint(
+        experiments,
+        knobs=["serving.batch_size", "serving.num_requests"],
+        latency_budget_ms=200,
+    )
+
+    assert rec.best is not None
+    assert rec.best.values == {"serving.batch_size": 4, "serving.num_requests": 200}
+
+
+def test_recommend_joint_ignores_experiments_missing_a_knob():
+    experiments = [
+        _combo_exp(1, 4, 200, throughput=300, latency=150),
+        Experiment(
+            id=2,
+            created_at="2026-01-01",
+            scenario="vllm_baseline",
+            backend="vllm",
+            config_path="cfg_2.toml",
+            config={"serving": {"batch_size": 8}},
+            status="completed",
+            metrics={"throughput_tokens_per_sec": 400, "latency_ms": 200},
+        ),
+    ]
+
+    rec = recommend_joint(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is not None
+    assert rec.best.experiment_id == 1
