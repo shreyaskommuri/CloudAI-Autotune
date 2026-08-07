@@ -446,6 +446,105 @@ def test_recommend_explore_writes_suggested_combo_not_best_combo(tmp_path):
     assert written["serving"]["batch_size"] != 4.0
 
 
+def test_recommend_search_requires_joint(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["recommend", "--db", str(tmp_path / "demo.db"), "--knob", "serving.batch_size", "--search"],
+    )
+
+    assert result.exit_code != 0
+    assert "--search requires --joint" in result.output
+
+
+def test_recommend_search_and_explore_are_mutually_exclusive(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(tmp_path / "demo.db"),
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+            "--search",
+            "--explore",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--search and --explore cannot be used together" in result.output
+
+
+def test_recommend_search_can_suggest_a_multi_knob_move(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+
+    # batch_size alone (num_requests=100): 1 -> 4 outpaces.
+    _ingest_combo(runner, db_path, 1, 100, "reports/examples/vllm_batch1.json")
+    _ingest_combo(runner, db_path, 4, 100, "reports/examples/vllm_batch4.json")
+    # num_requests alone (batch_size=4): 100 -> 200 outpaces harder (batch8 report has the
+    # highest throughput/latency of the bundled examples, reused here for the second axis).
+    _ingest_combo(runner, db_path, 4, 200, "reports/examples/vllm_batch8.json")
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+            "--search",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Search reason:" in result.output
+    assert "Suggested untried combo:" in result.output
+
+
+def test_recommend_search_respects_max_candidates(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+
+    _ingest_combo(runner, db_path, 1, 100, "reports/examples/vllm_batch1.json")
+    _ingest_combo(runner, db_path, 4, 100, "reports/examples/vllm_batch4.json")
+    _ingest_combo(runner, db_path, 4, 200, "reports/examples/vllm_batch8.json")
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+            "--search",
+            "--max-candidates",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "kept top 1" in result.output
+
+
 def test_ingest_records_notes_for_experiment_context(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "demo.db"

@@ -1,7 +1,13 @@
 import pytest
 
 from autotune.database import Experiment
-from autotune.recommender import discover_knobs, recommend_joint, recommend_next, suggest_untried_combo
+from autotune.recommender import (
+    discover_knobs,
+    recommend_joint,
+    recommend_next,
+    suggest_joint_step,
+    suggest_untried_combo,
+)
 
 
 def _exp(id_, batch_size, throughput, latency, status="completed", **extra_metrics):
@@ -402,3 +408,82 @@ def test_suggest_untried_combo_respects_budgets():
 
     assert rec.best is not None
     assert rec.best.values == {"serving.batch_size": 4, "serving.num_requests": 200}
+
+
+def test_suggest_joint_step_with_no_experiments():
+    rec = suggest_joint_step([], knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is None
+    assert rec.suggested is None
+    assert "No completed" in rec.reason
+
+
+def test_suggest_joint_step_can_move_two_knobs_at_once():
+    """Unlike suggest_untried_combo, suggest_joint_step is allowed to change more than one
+    knob per suggestion when both independently look like they're still scaling well."""
+    experiments = [
+        _combo_exp(1, 1, 100, throughput=120, latency=90),
+        # batch_size alone (num_requests=100): 1 -> 4 outpaces.
+        _combo_exp(2, 4, 100, throughput=330, latency=160),
+        # num_requests alone (batch_size=4): 100 -> 200 outpaces even harder.
+        _combo_exp(3, 4, 200, throughput=500, latency=170),
+    ]
+
+    rec = suggest_joint_step(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is not None
+    assert rec.best.values == {"serving.batch_size": 4, "serving.num_requests": 200}
+    assert rec.suggested is not None
+    # Both knobs moved in one suggestion, not just one.
+    assert rec.suggested == {"serving.batch_size": 8, "serving.num_requests": 400}
+    assert "serving.batch_size" in rec.reason
+    assert "serving.num_requests" in rec.reason
+
+
+def test_suggest_joint_step_never_repeats_an_already_tried_combo():
+    experiments = [
+        _combo_exp(1, 1, 100, throughput=120, latency=90),
+        _combo_exp(2, 4, 100, throughput=330, latency=160),
+        _combo_exp(3, 4, 200, throughput=500, latency=170),
+        # The natural top candidate (batch_size=8, num_requests=400) was already tried.
+        _combo_exp(4, 8, 400, throughput=520, latency=175),
+    ]
+
+    rec = suggest_joint_step(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    tried = {(1, 100), (4, 100), (4, 200), (8, 400)}
+    assert rec.suggested is not None
+    assert (rec.suggested["serving.batch_size"], rec.suggested["serving.num_requests"]) not in tried
+
+
+def test_suggest_joint_step_respects_budgets():
+    experiments = [
+        _combo_exp(1, 4, 200, throughput=300, latency=150),
+        _combo_exp(2, 8, 400, throughput=430, latency=260),  # breaches budget, excluded
+    ]
+
+    rec = suggest_joint_step(
+        experiments,
+        knobs=["serving.batch_size", "serving.num_requests"],
+        latency_budget_ms=200,
+    )
+
+    assert rec.best is not None
+    assert rec.best.values == {"serving.batch_size": 4, "serving.num_requests": 200}
+
+
+def test_suggest_joint_step_respects_max_candidates_cap():
+    experiments = [
+        _combo_exp(1, 1, 100, throughput=120, latency=90),
+        _combo_exp(2, 4, 100, throughput=330, latency=160),
+        _combo_exp(3, 4, 200, throughput=500, latency=170),
+    ]
+
+    rec = suggest_joint_step(
+        experiments,
+        knobs=["serving.batch_size", "serving.num_requests"],
+        max_candidates=1,
+    )
+
+    assert rec.suggested is not None
+    assert "kept top 1" in rec.reason
