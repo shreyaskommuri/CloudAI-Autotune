@@ -364,6 +364,44 @@ autotune recommend --all-knobs --latency-budget-ms 200
 This prints one recommendation per knob and writes `configs/derived/batch6.toml`
 with the suggested values applied.
 
+By default, each `--knob` gets its own independent recommendation, as if the
+other knobs didn't exist. To look at combinations of knobs together instead,
+add `--joint` (needs at least two `--knob` values, and can't be combined with
+`--all-knobs`):
+
+```bash
+autotune recommend \
+  --knob serving.batch_size \
+  --knob serving.num_requests \
+  --joint
+```
+
+This reports the best *combination* tried so far (by the same throughput/latency
+efficiency score used elsewhere) plus the Pareto frontier, every other combo
+that isn't strictly beaten on both throughput and latency by another one, so
+real tradeoffs stay visible instead of being collapsed into one number.
+
+`--joint` only reports on combinations you've already run. It does not search
+for or suggest untried combinations, that's a bigger, still-undecided feature
+tracked in the Roadmap section below. `--derive-from`/`--out-config` work the
+same way as single-knob mode, writing the best combo's values into a new config.
+
+## Ingest DSE Sweeps
+
+If a CloudAI scenario used a swept (sweep-configured) parameter, CloudAI's own
+DSE grid search logs one row per trial to a `trajectory.csv` under the results
+directory. `ingest-dse` finds every `trajectory.csv` under a results directory
+and records each sweep as an experiment, with its per-trial data available in
+the dashboard:
+
+```bash
+autotune ingest-dse results/ --db autotune.db
+```
+
+Each sweep becomes one experiment (`backend=cloudai-dse`) with `best_reward`,
+`best_step`, and `num_trials` recorded as its metrics. This only visualizes
+sweeps CloudAI already ran; it doesn't add new search logic on top.
+
 ## Dashboard
 
 ```bash
@@ -372,7 +410,9 @@ streamlit run dashboard/app.py
 
 The dashboard reads the local SQLite database and shows experiment history,
 best/latest run comparison, a regression check against the immediately
-preceding run, metric charts, and the current recommendation.
+preceding run, metric charts, and the current recommendation. If any ingested
+runs came from `ingest-dse`, a "DSE sweeps" section also shows a reward-per-trial
+chart and the best action found for a selected sweep.
 
 ## Development
 
@@ -417,18 +457,19 @@ requiring `--knob` per key up front), and DSE sweep ingestion/visualization
 (`autotune ingest-dse`), which parses CloudAI's own `trajectory.csv` sweep
 logs (from `cloudai_gym.py`'s grid search) into the same SQLite store and
 dashboard, so a sweep CloudAI already ran can be browsed without
-reimplementing any search logic. Kept local-first by design, not a
-target with an end state — every new item below should keep working with
-zero services.
+reimplementing any search logic, and joint multi-knob *reporting* via
+`recommend --joint` (best combination tried so far, plus the Pareto frontier
+of real tradeoffs, across two or more knobs looked at together instead of
+independently). Kept local-first by design, not a target with an end state —
+every new item below should keep working with zero services.
 
 ### Later — needs your input before any code gets written
 
-- **Joint multi-knob search.** Actually searching *combinations* of knobs
-  (not just reporting independent bests) needs a real objective function
+- **Joint multi-knob search (suggesting untried combinations).** `recommend
+  --joint` only reports on combinations already tried. Actually searching for
+  combinations that have never been run needs a real objective function
   beyond the current throughput/latency ratio, a search-budget model, and a
-  decision on whether Autotune should ever suggest untried combinations or
-  stay strictly "next single point from history." CloudAI's own DSE stack is
-  exhaustive grid search only (no smarter strategy exists to lean on), so
-  this is still a from-scratch design question, not something the ingestion
-  work above resolves. Don't start this without agreeing on scope, it's the
-  one item here that's a genuine design project, not a bounded fix.
+  decision on how aggressively to explore versus stay close to known-good
+  points. CloudAI's own DSE stack is exhaustive grid search only (no smarter
+  strategy exists to lean on), so this is still a from-scratch design
+  question. Don't start this without agreeing on scope.

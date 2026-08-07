@@ -30,6 +30,23 @@ class Recommendation:
     reason: str
 
 
+@dataclass
+class ComboResult:
+    values: dict[str, float]
+    experiment_id: Optional[int]
+    throughput: float
+    latency: float
+    efficiency: float
+
+
+@dataclass
+class JointRecommendation:
+    knobs: list[str]
+    best: Optional[ComboResult]
+    frontier: list[ComboResult]
+    reason: str
+
+
 def _knob_value(exp: Experiment, knob: str) -> Optional[float]:
     node = exp.config
     for part in knob.split("."):
@@ -235,6 +252,102 @@ def recommend_next(
             f"{suggested} nearby."
         ),
     )
+
+
+def recommend_joint(
+    experiments: list[Experiment],
+    knobs: list[str],
+    latency_budget_ms: Optional[float] = None,
+    ttft_budget_ms: Optional[float] = None,
+    min_throughput_tokens_per_sec: Optional[float] = None,
+    runtime_budget_sec: Optional[float] = None,
+    max_failure_rate: Optional[float] = None,
+) -> JointRecommendation:
+    """Report the best combination of `knobs` tried so far, plus the Pareto frontier.
+
+    Unlike `recommend_next`, this looks at knobs jointly rather than one at a time. It only
+    reports on combinations already run, it does not suggest untried combinations, that needs
+    a real search strategy and is deliberately out of scope here.
+    """
+    if len(knobs) < 2:
+        raise ValueError("recommend_joint needs at least two knobs; use recommend_next for a single knob.")
+
+    budgets = Budgets(
+        latency_ms=latency_budget_ms,
+        ttft_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_sec=runtime_budget_sec,
+        failure_rate=max_failure_rate,
+    )
+
+    completed = [
+        e
+        for e in experiments
+        if e.status == "completed"
+        and all(_knob_value(e, knob) is not None for knob in knobs)
+        and _metric_value(e, "throughput_tokens_per_sec") is not None
+        and _metric_value(e, "latency_ms") is not None
+        and (not budgets.has_checks() or evaluate_experiment(e, budgets).status != "fail")
+    ]
+
+    if not completed:
+        return JointRecommendation(
+            knobs=list(knobs),
+            best=None,
+            frontier=[],
+            reason=(
+                "No completed, in-budget experiments have values for all of "
+                f"{', '.join(knobs)} plus usable throughput and latency metrics yet."
+            ),
+        )
+
+    # One combo per unique tuple of knob values; keep the latest experiment (highest id)
+    # when a combo was run more than once.
+    combos_by_values: dict[tuple[float, ...], Experiment] = {}
+    for exp in completed:
+        key = tuple(_knob_value(exp, knob) for knob in knobs)
+        current = combos_by_values.get(key)
+        if current is None or (exp.id or 0) > (current.id or 0):
+            combos_by_values[key] = exp
+
+    combos = [
+        ComboResult(
+            values=dict(zip(knobs, key, strict=True)),
+            experiment_id=exp.id,
+            throughput=_metric_value(exp, "throughput_tokens_per_sec") or 0.0,
+            latency=_metric_value(exp, "latency_ms") or 0.0,
+            efficiency=_efficiency(exp) or 0.0,
+        )
+        for key, exp in combos_by_values.items()
+    ]
+
+    best = max(combos, key=lambda c: c.efficiency)
+    frontier = _pareto_frontier(combos)
+    combo_desc = ", ".join(f"{k}={v:g}" for k, v in best.values.items())
+
+    return JointRecommendation(
+        knobs=list(knobs),
+        best=best,
+        frontier=frontier,
+        reason=(
+            f"Best combo tried so far is {combo_desc} "
+            f"({best.throughput:.0f} tok/s @ {best.latency:.0f}ms). "
+            f"{len(combos)} distinct combo(s) tried, {len(frontier)} on the Pareto frontier "
+            "(not beaten on both throughput and latency by another combo)."
+        ),
+    )
+
+
+def _pareto_frontier(combos: list[ComboResult]) -> list[ComboResult]:
+    """Combos not strictly dominated by another: higher throughput, lower-or-equal latency
+    (or equal throughput with strictly lower latency), beats a combo out of the frontier."""
+
+    def dominates(a: ComboResult, b: ComboResult) -> bool:
+        at_least_as_good = a.throughput >= b.throughput and a.latency <= b.latency
+        strictly_better = a.throughput > b.throughput or a.latency < b.latency
+        return at_least_as_good and strictly_better
+
+    return [combo for combo in combos if not any(dominates(other, combo) for other in combos if other is not combo)]
 
 
 def _pct_change(old: Optional[float], new: Optional[float]) -> Optional[float]:

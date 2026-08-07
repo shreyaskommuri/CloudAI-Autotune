@@ -18,7 +18,7 @@ from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
 from autotune.dse import best_trial, derive_test_name, find_trajectory_files, parse_trajectory
 from autotune.parser import parse_report
-from autotune.recommender import DEFAULT_KNOB, discover_knobs, recommend_next
+from autotune.recommender import DEFAULT_KNOB, discover_knobs, recommend_joint, recommend_next
 from autotune.runner import CloudAIRunner, RunResult
 
 DEMO_REPORTS = (
@@ -621,6 +621,11 @@ def _ingest_config(
     is_flag=True,
     help="Recommend for every numeric config key seen across completed runs, instead of --knob.",
 )
+@click.option(
+    "--joint",
+    is_flag=True,
+    help="Treat two or more --knob values as one combination instead of independent recommendations.",
+)
 @click.option("--latency-budget-ms", type=float, default=None, help="Maximum acceptable latency in ms.")
 @click.option(
     "--ttft-budget-ms",
@@ -663,6 +668,7 @@ def recommend(
     scenario: Optional[str],
     knobs: tuple[str, ...],
     all_knobs: bool,
+    joint: bool,
     latency_budget_ms: Optional[float],
     ttft_budget_ms: Optional[float],
     min_throughput_tokens_per_sec: Optional[float],
@@ -676,6 +682,10 @@ def recommend(
         raise click.UsageError("--derive-from and --out-config must be provided together.")
     if all_knobs and knobs:
         raise click.UsageError("--all-knobs and --knob cannot be used together.")
+    if joint and all_knobs:
+        raise click.UsageError("--joint and --all-knobs cannot be used together.")
+    if joint and len(knobs) < 2:
+        raise click.UsageError("--joint needs at least two --knob values.")
 
     with ExperimentDB(db_path) as db:
         experiments = db.list_experiments(scenario=scenario)
@@ -687,6 +697,37 @@ def recommend(
             return
     else:
         knobs = knobs or (DEFAULT_KNOB,)
+
+    if joint:
+        joint_rec = recommend_joint(
+            experiments,
+            knobs=list(knobs),
+            latency_budget_ms=latency_budget_ms,
+            ttft_budget_ms=ttft_budget_ms,
+            min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+            runtime_budget_sec=runtime_budget_sec,
+            max_failure_rate=max_failure_rate,
+        )
+        click.echo(f"Knobs: {', '.join(joint_rec.knobs)}")
+        click.echo(f"Reason: {joint_rec.reason}")
+        if joint_rec.best is not None:
+            best_desc = ", ".join(f"{k}={v:g}" for k, v in joint_rec.best.values.items())
+            click.echo(
+                f"Best combo: {best_desc} ({joint_rec.best.throughput:.0f} tok/s @ {joint_rec.best.latency:.0f}ms)"
+            )
+            for combo in joint_rec.frontier:
+                if combo is joint_rec.best:
+                    continue
+                combo_desc = ", ".join(f"{k}={v:g}" for k, v in combo.values.items())
+                click.echo(f"Frontier: {combo_desc} ({combo.throughput:.0f} tok/s @ {combo.latency:.0f}ms)")
+
+        if derive_from is not None and out_config is not None:
+            if joint_rec.best is None:
+                click.echo("No combo available; derived config not written.")
+                return
+            written = config_mutator.derive_config(derive_from, joint_rec.best.values, out_config)
+            click.echo(f"Wrote suggested config to {written}")
+        return
 
     recommendations = [
         recommend_next(
