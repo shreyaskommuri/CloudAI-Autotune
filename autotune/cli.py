@@ -18,7 +18,7 @@ from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
 from autotune.dse import best_trial, derive_test_name, find_trajectory_files, parse_trajectory
 from autotune.parser import parse_report
-from autotune.recommender import DEFAULT_KNOB, discover_knobs, recommend_joint, recommend_next
+from autotune.recommender import DEFAULT_KNOB, discover_knobs, recommend_joint, recommend_next, suggest_untried_combo
 from autotune.runner import CloudAIRunner, RunResult
 
 DEMO_REPORTS = (
@@ -626,6 +626,11 @@ def _ingest_config(
     is_flag=True,
     help="Treat two or more --knob values as one combination instead of independent recommendations.",
 )
+@click.option(
+    "--explore",
+    is_flag=True,
+    help="With --joint, also suggest one untried combination extending the best combo found.",
+)
 @click.option("--latency-budget-ms", type=float, default=None, help="Maximum acceptable latency in ms.")
 @click.option(
     "--ttft-budget-ms",
@@ -669,6 +674,7 @@ def recommend(
     knobs: tuple[str, ...],
     all_knobs: bool,
     joint: bool,
+    explore: bool,
     latency_budget_ms: Optional[float],
     ttft_budget_ms: Optional[float],
     min_throughput_tokens_per_sec: Optional[float],
@@ -686,6 +692,8 @@ def recommend(
         raise click.UsageError("--joint and --all-knobs cannot be used together.")
     if joint and len(knobs) < 2:
         raise click.UsageError("--joint needs at least two --knob values.")
+    if explore and not joint:
+        raise click.UsageError("--explore requires --joint.")
 
     with ExperimentDB(db_path) as db:
         experiments = db.list_experiments(scenario=scenario)
@@ -721,11 +729,29 @@ def recommend(
                 combo_desc = ", ".join(f"{k}={v:g}" for k, v in combo.values.items())
                 click.echo(f"Frontier: {combo_desc} ({combo.throughput:.0f} tok/s @ {combo.latency:.0f}ms)")
 
+        combo_to_write = joint_rec.best.values if joint_rec.best is not None else None
+
+        if explore:
+            explore_rec = suggest_untried_combo(
+                experiments,
+                knobs=list(knobs),
+                latency_budget_ms=latency_budget_ms,
+                ttft_budget_ms=ttft_budget_ms,
+                min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+                runtime_budget_sec=runtime_budget_sec,
+                max_failure_rate=max_failure_rate,
+            )
+            click.echo(f"Explore reason: {explore_rec.reason}")
+            if explore_rec.suggested is not None:
+                suggested_desc = ", ".join(f"{k}={v:g}" for k, v in explore_rec.suggested.items())
+                click.echo(f"Suggested untried combo: {suggested_desc}")
+                combo_to_write = explore_rec.suggested
+
         if derive_from is not None and out_config is not None:
-            if joint_rec.best is None:
+            if combo_to_write is None:
                 click.echo("No combo available; derived config not written.")
                 return
-            written = config_mutator.derive_config(derive_from, joint_rec.best.values, out_config)
+            written = config_mutator.derive_config(derive_from, combo_to_write, out_config)
             click.echo(f"Wrote suggested config to {written}")
         return
 

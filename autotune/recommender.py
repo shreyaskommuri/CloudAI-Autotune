@@ -280,15 +280,7 @@ def recommend_joint(
         failure_rate=max_failure_rate,
     )
 
-    completed = [
-        e
-        for e in experiments
-        if e.status == "completed"
-        and all(_knob_value(e, knob) is not None for knob in knobs)
-        and _metric_value(e, "throughput_tokens_per_sec") is not None
-        and _metric_value(e, "latency_ms") is not None
-        and (not budgets.has_checks() or evaluate_experiment(e, budgets).status != "fail")
-    ]
+    completed = _completed_for_knobs(experiments, knobs, budgets)
 
     if not completed:
         return JointRecommendation(
@@ -301,26 +293,7 @@ def recommend_joint(
             ),
         )
 
-    # One combo per unique tuple of knob values; keep the latest experiment (highest id)
-    # when a combo was run more than once.
-    combos_by_values: dict[tuple[float, ...], Experiment] = {}
-    for exp in completed:
-        key = tuple(_knob_value(exp, knob) for knob in knobs)
-        current = combos_by_values.get(key)
-        if current is None or (exp.id or 0) > (current.id or 0):
-            combos_by_values[key] = exp
-
-    combos = [
-        ComboResult(
-            values=dict(zip(knobs, key, strict=True)),
-            experiment_id=exp.id,
-            throughput=_metric_value(exp, "throughput_tokens_per_sec") or 0.0,
-            latency=_metric_value(exp, "latency_ms") or 0.0,
-            efficiency=_efficiency(exp) or 0.0,
-        )
-        for key, exp in combos_by_values.items()
-    ]
-
+    combos = _combos_from_completed(completed, knobs)
     best = max(combos, key=lambda c: c.efficiency)
     frontier = _pareto_frontier(combos)
     combo_desc = ", ".join(f"{k}={v:g}" for k, v in best.values.items())
@@ -336,6 +309,146 @@ def recommend_joint(
             "(not beaten on both throughput and latency by another combo)."
         ),
     )
+
+
+@dataclass
+class ExploreRecommendation:
+    knobs: list[str]
+    best: Optional[ComboResult]
+    suggested: Optional[dict[str, float]]
+    reason: str
+
+
+def suggest_untried_combo(
+    experiments: list[Experiment],
+    knobs: list[str],
+    latency_budget_ms: Optional[float] = None,
+    ttft_budget_ms: Optional[float] = None,
+    min_throughput_tokens_per_sec: Optional[float] = None,
+    runtime_budget_sec: Optional[float] = None,
+    max_failure_rate: Optional[float] = None,
+) -> ExploreRecommendation:
+    """Suggest one untried combination of `knobs`, extending the best combo tried so far.
+
+    Picks one knob to perturb, holding the rest at the best combo's values, reusing the same
+    doubling/halving trend logic `recommend_next` already uses for that one knob. Prefers a
+    knob whose independent trend still looks like it's scaling well; falls back to the first
+    knob with any suggestion otherwise. Stateless by design, call again after ingesting the
+    result to get the next suggestion, there is no separate search-budget concept to configure.
+    """
+    budgets = Budgets(
+        latency_ms=latency_budget_ms,
+        ttft_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_sec=runtime_budget_sec,
+        failure_rate=max_failure_rate,
+    )
+
+    joint = recommend_joint(
+        experiments,
+        knobs=knobs,
+        latency_budget_ms=latency_budget_ms,
+        ttft_budget_ms=ttft_budget_ms,
+        min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+        runtime_budget_sec=runtime_budget_sec,
+        max_failure_rate=max_failure_rate,
+    )
+    if joint.best is None:
+        return ExploreRecommendation(knobs=list(knobs), best=None, suggested=None, reason=joint.reason)
+
+    completed = _completed_for_knobs(experiments, knobs, budgets)
+    tried_values = {tuple(_knob_value(exp, knob) for knob in knobs) for exp in completed}
+
+    # Isolate each knob's marginal trend by only looking at experiments that match the best
+    # combo on every *other* knob — otherwise recommend_next's "latest vs. previous" trend
+    # can compare two runs that actually differ on a different knob, not this one.
+    per_knob: dict[str, Recommendation] = {}
+    for knob in knobs:
+        other_knobs = [k for k in knobs if k != knob]
+        isolated = [
+            e for e in experiments if all(_knob_value(e, other) == joint.best.values[other] for other in other_knobs)
+        ]
+        per_knob[knob] = recommend_next(
+            isolated,
+            knob=knob,
+            latency_budget_ms=latency_budget_ms,
+            ttft_budget_ms=ttft_budget_ms,
+            min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+            runtime_budget_sec=runtime_budget_sec,
+            max_failure_rate=max_failure_rate,
+        )
+
+    # Prefer a knob whose independent trend still looks like it's scaling well ("outpaced" is
+    # recommend_next's marker for that case); otherwise fall back to any knob with a suggestion.
+    preferred = [k for k in knobs if "outpaced" in per_knob[k].reason]
+    candidate_order = list(dict.fromkeys(preferred + knobs))
+
+    for knob in candidate_order:
+        suggested_value = per_knob[knob].suggested_value
+        if suggested_value is None:
+            continue
+        candidate = dict(joint.best.values)
+        candidate[knob] = suggested_value
+        if tuple(candidate[k] for k in knobs) in tried_values:
+            continue
+        combo_desc = ", ".join(f"{k}={v:g}" for k, v in joint.best.values.items())
+        return ExploreRecommendation(
+            knobs=list(knobs),
+            best=joint.best,
+            suggested=candidate,
+            reason=(
+                f"Best combo tried so far is {combo_desc} "
+                f"({joint.best.throughput:.0f} tok/s @ {joint.best.latency:.0f}ms). "
+                f"Exploring by adjusting {knob} to {suggested_value:g} ({per_knob[knob].reason}), "
+                "holding the other knob(s) at the best combo's values."
+            ),
+        )
+
+    combo_desc = ", ".join(f"{k}={v:g}" for k, v in joint.best.values.items())
+    return ExploreRecommendation(
+        knobs=list(knobs),
+        best=joint.best,
+        suggested=None,
+        reason=(
+            f"Best combo tried so far is {combo_desc} "
+            f"({joint.best.throughput:.0f} tok/s @ {joint.best.latency:.0f}ms). "
+            "No untried direction could be suggested for any knob from the current data."
+        ),
+    )
+
+
+def _completed_for_knobs(experiments: list[Experiment], knobs: list[str], budgets: Budgets) -> list[Experiment]:
+    return [
+        e
+        for e in experiments
+        if e.status == "completed"
+        and all(_knob_value(e, knob) is not None for knob in knobs)
+        and _metric_value(e, "throughput_tokens_per_sec") is not None
+        and _metric_value(e, "latency_ms") is not None
+        and (not budgets.has_checks() or evaluate_experiment(e, budgets).status != "fail")
+    ]
+
+
+def _combos_from_completed(completed: list[Experiment], knobs: list[str]) -> list[ComboResult]:
+    # One combo per unique tuple of knob values; keep the latest experiment (highest id)
+    # when a combo was run more than once.
+    combos_by_values: dict[tuple[float, ...], Experiment] = {}
+    for exp in completed:
+        key = tuple(_knob_value(exp, knob) for knob in knobs)
+        current = combos_by_values.get(key)
+        if current is None or (exp.id or 0) > (current.id or 0):
+            combos_by_values[key] = exp
+
+    return [
+        ComboResult(
+            values=dict(zip(knobs, key, strict=True)),
+            experiment_id=exp.id,
+            throughput=_metric_value(exp, "throughput_tokens_per_sec") or 0.0,
+            latency=_metric_value(exp, "latency_ms") or 0.0,
+            efficiency=_efficiency(exp) or 0.0,
+        )
+        for key, exp in combos_by_values.items()
+    ]
 
 
 def _pareto_frontier(combos: list[ComboResult]) -> list[ComboResult]:

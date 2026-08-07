@@ -381,10 +381,31 @@ efficiency score used elsewhere) plus the Pareto frontier, every other combo
 that isn't strictly beaten on both throughput and latency by another one, so
 real tradeoffs stay visible instead of being collapsed into one number.
 
-`--joint` only reports on combinations you've already run. It does not search
-for or suggest untried combinations, that's a bigger, still-undecided feature
-tracked in the Roadmap section below. `--derive-from`/`--out-config` work the
-same way as single-knob mode, writing the best combo's values into a new config.
+`--joint` only reports on combinations you've already run. To also get a
+suggestion for one *untried* combination, add `--explore` (requires `--joint`):
+
+```bash
+autotune recommend \
+  --knob serving.batch_size \
+  --knob serving.num_requests \
+  --joint --explore
+```
+
+This starts from the best combo found and picks one knob to grow or shrink,
+holding the others fixed, reusing the same doubling/halving trend logic
+`recommend_next` already uses for a single knob, just applied per-knob around
+the best combo's own value for every other knob rather than blindly. It prefers
+whichever knob's own trend still looks like it's scaling well; if the natural
+next value for every knob has already been tried, it says so rather than
+repeating a combo you've already run.
+
+There's no separate "search budget" to configure: like every other Autotune
+recommendation, this is one suggestion per call, run it, ingest the result,
+call `recommend --joint --explore` again for the next one. Suggesting
+combinations with a real search strategy beyond this simple, explainable
+heuristic is a bigger, still-undecided feature tracked in the Roadmap section
+below. `--derive-from`/`--out-config` write the exploration suggestion (or the
+best combo, if `--explore` finds nothing new) into a new config.
 
 ## Ingest DSE Sweeps
 
@@ -457,19 +478,27 @@ requiring `--knob` per key up front), and DSE sweep ingestion/visualization
 (`autotune ingest-dse`), which parses CloudAI's own `trajectory.csv` sweep
 logs (from `cloudai_gym.py`'s grid search) into the same SQLite store and
 dashboard, so a sweep CloudAI already ran can be browsed without
-reimplementing any search logic, and joint multi-knob *reporting* via
+reimplementing any search logic, joint multi-knob *reporting* via
 `recommend --joint` (best combination tried so far, plus the Pareto frontier
 of real tradeoffs, across two or more knobs looked at together instead of
-independently). Kept local-first by design, not a target with an end state —
-every new item below should keep working with zero services.
+independently), and joint multi-knob *exploration* via `recommend --joint
+--explore` (suggests one untried combination by extending the best combo on
+whichever knob's own trend still looks like it's scaling well, reusing the
+same doubling/halving heuristic already used for a single knob rather than a
+new search algorithm). Kept local-first by design, not a target with an end
+state — every new item below should keep working with zero services.
 
 ### Later — needs your input before any code gets written
 
-- **Joint multi-knob search (suggesting untried combinations).** `recommend
-  --joint` only reports on combinations already tried. Actually searching for
-  combinations that have never been run needs a real objective function
-  beyond the current throughput/latency ratio, a search-budget model, and a
-  decision on how aggressively to explore versus stay close to known-good
-  points. CloudAI's own DSE stack is exhaustive grid search only (no smarter
-  strategy exists to lean on), so this is still a from-scratch design
-  question. Don't start this without agreeing on scope.
+- **A real multi-knob search strategy.** `recommend --joint --explore`
+  suggests one untried point by extending the best combo along a single knob
+  at a time with the existing doubling/halving heuristic, it does not do
+  genuine joint search (evaluating combinations as combinations, backtracking
+  when a direction stalls, or trading off multiple promising knobs against
+  each other at once). A real version of this needs an objective function
+  beyond the current throughput/latency ratio, a decision on how aggressively
+  to explore versus stay close to known-good points, and possibly a different
+  scoring approach entirely for higher-dimensional knob spaces. CloudAI's own
+  DSE stack is exhaustive grid search only (no smarter strategy exists to
+  lean on), so this is still a from-scratch design question. Don't start this
+  without agreeing on scope.

@@ -1,7 +1,7 @@
 import pytest
 
 from autotune.database import Experiment
-from autotune.recommender import discover_knobs, recommend_joint, recommend_next
+from autotune.recommender import discover_knobs, recommend_joint, recommend_next, suggest_untried_combo
 
 
 def _exp(id_, batch_size, throughput, latency, status="completed", **extra_metrics):
@@ -342,3 +342,63 @@ def test_recommend_joint_ignores_experiments_missing_a_knob():
 
     assert rec.best is not None
     assert rec.best.experiment_id == 1
+
+
+def test_suggest_untried_combo_with_no_experiments():
+    rec = suggest_untried_combo([], knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is None
+    assert rec.suggested is None
+    assert "No completed" in rec.reason
+
+
+def test_suggest_untried_combo_extends_best_combo_on_the_scaling_knob():
+    experiments = [
+        # batch_size alone: 1 -> 4 throughput/latency both grow, throughput outpaces latency
+        _combo_exp(1, 1, 200, throughput=120, latency=90),
+        _combo_exp(2, 4, 200, throughput=330, latency=160),
+        # num_requests alone (batch_size held at 4): 200 -> 400 latency grows faster
+        _combo_exp(3, 4, 400, throughput=350, latency=400),
+    ]
+
+    rec = suggest_untried_combo(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    assert rec.best is not None
+    assert rec.best.values == {"serving.batch_size": 4, "serving.num_requests": 200}
+    assert rec.suggested is not None
+    # batch_size's independent trend is still scaling well (outpaced); num_requests is not.
+    assert rec.suggested["serving.batch_size"] == 8
+    assert rec.suggested["serving.num_requests"] == 200
+    assert "serving.batch_size" in rec.reason
+    assert "outpaced" in rec.reason
+
+
+def test_suggest_untried_combo_never_repeats_an_already_tried_combo():
+    experiments = [
+        _combo_exp(1, 1, 100, throughput=120, latency=90),
+        _combo_exp(2, 4, 100, throughput=330, latency=160),
+        # The natural "double batch_size, hold num_requests" candidate was already tried.
+        _combo_exp(3, 8, 100, throughput=350, latency=200),
+    ]
+
+    rec = suggest_untried_combo(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    tried = {(1, 100), (4, 100), (8, 100)}
+    assert rec.suggested is not None
+    assert (rec.suggested["serving.batch_size"], rec.suggested["serving.num_requests"]) not in tried
+
+
+def test_suggest_untried_combo_respects_budgets():
+    experiments = [
+        _combo_exp(1, 4, 200, throughput=300, latency=150),
+        _combo_exp(2, 8, 400, throughput=430, latency=260),  # breaches budget, excluded
+    ]
+
+    rec = suggest_untried_combo(
+        experiments,
+        knobs=["serving.batch_size", "serving.num_requests"],
+        latency_budget_ms=200,
+    )
+
+    assert rec.best is not None
+    assert rec.best.values == {"serving.batch_size": 4, "serving.num_requests": 200}
