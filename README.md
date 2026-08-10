@@ -426,6 +426,32 @@ preferring fewer simultaneous changes as a tiebreak. It's still a heuristic
 proxy, not a measurement, and it's still one suggestion per call with no
 separate search-budget state.
 
+`--search`'s trend-alignment score is still a proxy, not a measurement. For a
+real objective function fit to observed data, use `--optimize` instead
+(mutually exclusive with `--search`/`--explore`, also requires `--joint`):
+
+```bash
+autotune recommend \
+  --knob serving.batch_size \
+  --knob serving.num_requests \
+  --joint --optimize
+```
+
+This fits a quadratic response surface (`efficiency ~ b0 + sum(bi*xi +
+ci*xi^2)`) by least squares over every completed, in-budget combo tried so
+far, and scores the same bounded neighborhood `--search` considers by
+*predicted* efficiency instead of trend alignment. With too little data to
+fit reliably — fewer distinct combos than free parameters, or a
+rank-deficient fit (e.g. only two distinct values ever tried for some knob,
+making its linear and squared terms collinear) — it falls back to
+`--search`'s heuristic and says so, rather than guessing; this doubles as an
+explore-first-then-exploit switch as real data accumulates. Every suggestion
+is recorded in the database so a pending untried combo isn't suggested again
+on the next call; once you actually run it and ingest the result, it becomes
+a normal completed experiment and is folded into the next fit, which is how
+a suggestion that turns out wrong changes future ones, without any separate
+demotion logic.
+
 ## Ingest DSE Sweeps
 
 If a CloudAI scenario used a swept (sweep-configured) parameter, CloudAI's own
@@ -508,23 +534,35 @@ new search algorithm), and multi-knob *joint search* via `recommend --joint
 --search` (suggests one untried combination that may change two or more knobs
 at once, scoring a bounded, capped neighborhood by how many knobs land on
 their own independently promising direction, still a heuristic proxy since
-untried combos have no real measurement to rank by). Kept local-first by
-design, not a target with an end state — every new item below should keep
-working with zero services.
+untried combos have no real measurement to rank by), and a
+measurement-driven search strategy via `recommend --joint --optimize`
+(`autotune/optimizer.py`), which replaces that heuristic proxy with a
+quadratic response surface (`efficiency ~ b0 + sum(bi*xi + ci*xi^2)`) fit by
+least squares over every completed, in-budget combo tried so far, scoring the
+same bounded neighborhood by *predicted* efficiency instead of trend
+alignment. With too little data to fit reliably (fewer distinct combos than
+free parameters, or a rank-deficient fit, e.g. only two distinct values tried
+for some knob), it falls back to `--search`'s heuristic rather than guessing
+— an implicit explore-first-then-exploit switch as real data accumulates.
+Suggestions are tracked in a `search_suggestions` table so a pending
+untried combo isn't suggested twice; once it's actually run, the outcome
+becomes a normal completed experiment and is included in the next fit, which
+is how a bad suggestion feeds back into future ones without any separate
+demotion logic. Kept local-first by design, not a target with an end state —
+every new item below should keep working with zero services.
 
 ### Later — needs your input before any code gets written
 
-- **A learned or measurement-driven search strategy.** `recommend --joint
-  --search` picks among a *heuristic* neighborhood, it never actually runs
-  anything, so its ranking is a proxy built from independent per-knob trends,
-  not a real objective function fit to observed data, and it doesn't
-  backtrack: a suggestion that turns out to make things worse doesn't change
-  future suggestions beyond however that new data point shifts the per-knob
-  trends. A real version of this needs an actual objective function (e.g. a
-  fitted response surface, not the current throughput/latency ratio), a
-  decision on how aggressively to explore versus stay close to known-good
-  points, and a way to use the outcome of a suggestion to inform the next one
-  beyond recomputing independent trends from scratch. CloudAI's own DSE stack
-  is exhaustive grid search only (no smarter strategy exists to lean on), so
-  this is still a from-scratch design question. Don't start this without
-  agreeing on scope.
+- **Contributing improvements back to CloudAI itself.** Autotune's own
+  multi-knob search work (`--joint`, `--explore`, `--search`, `--optimize`)
+  duplicates capability CloudAI's own DSE stack could have natively:
+  `configurator/base_agent.py` defines a generic, pluggable agent interface,
+  but `GridSearchAgent` (exhaustive grid search) is the only implementation
+  that ships, and `report_generator/dse_report.py` only ever reports a single
+  scalar "best" step, no Pareto frontier across competing metrics. Porting
+  the fitted-surface search from `--optimize` into a new `BaseAgent`
+  implementation, and porting `--joint`'s Pareto frontier into `DSEReport`,
+  are both real upstream candidates now that there's working, tested logic to
+  point to instead of a bare proposal — not started, needs scoping as its own
+  design conversation (and its own maintainer back-and-forth, separate from
+  the in-flight lazy-loading/`[[Definitions]]` parser work).

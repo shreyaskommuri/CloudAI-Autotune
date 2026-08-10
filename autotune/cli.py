@@ -17,6 +17,7 @@ from autotune.comparison import RegressionCheck, compare_latest_to_previous
 from autotune.database import Experiment, ExperimentDB
 from autotune.diffing import FieldDiff, diff_experiments
 from autotune.dse import best_trial, derive_test_name, find_trajectory_files, parse_trajectory
+from autotune.optimizer import resolve_pending_suggestions, suggest_joint_optimize
 from autotune.parser import parse_report
 from autotune.recommender import (
     DEFAULT_KNOB,
@@ -621,6 +622,7 @@ def _echo_joint_recommendation(
     knobs: list[str],
     explore: bool,
     search: bool,
+    optimize: bool,
     max_candidates: int,
     latency_budget_ms: Optional[float],
     ttft_budget_ms: Optional[float],
@@ -629,6 +631,7 @@ def _echo_joint_recommendation(
     max_failure_rate: Optional[float],
     derive_from: Optional[Path],
     out_config: Optional[Path],
+    db_path: str,
 ) -> None:
     joint_rec = recommend_joint(
         experiments,
@@ -683,6 +686,34 @@ def _echo_joint_recommendation(
             click.echo(f"Suggested untried combo: {format_combo(search_rec.suggested)}")
             combo_to_write = search_rec.suggested
 
+    if optimize:
+        with ExperimentDB(db_path) as db:
+            pending = db.list_suggestions(knobs)
+            for suggestion_id, experiment_id, actual_efficiency in resolve_pending_suggestions(
+                experiments, knobs, pending
+            ):
+                db.resolve_suggestion(suggestion_id, experiment_id, actual_efficiency)
+            pending = db.list_suggestions(knobs)
+
+            optimize_rec = suggest_joint_optimize(
+                experiments,
+                knobs=knobs,
+                pending_suggestions=pending,
+                latency_budget_ms=latency_budget_ms,
+                ttft_budget_ms=ttft_budget_ms,
+                min_throughput_tokens_per_sec=min_throughput_tokens_per_sec,
+                runtime_budget_sec=runtime_budget_sec,
+                max_failure_rate=max_failure_rate,
+                max_candidates=max_candidates,
+            )
+            click.echo(f"Optimize reason: {optimize_rec.reason}")
+            if optimize_rec.suggested is not None:
+                click.echo(f"Suggested untried combo: {format_combo(optimize_rec.suggested)}")
+                if optimize_rec.predicted_efficiency is not None:
+                    click.echo(f"Predicted efficiency: {optimize_rec.predicted_efficiency:.4f} tok/s per ms")
+                combo_to_write = optimize_rec.suggested
+                db.add_suggestion(knobs, optimize_rec.suggested, optimize_rec.predicted_efficiency)
+
     if derive_from is not None and out_config is not None:
         if combo_to_write is None:
             click.echo("No combo available; derived config not written.")
@@ -721,6 +752,15 @@ def _echo_joint_recommendation(
     help=(
         "With --joint, suggest one untried combination that may change two or more knobs at "
         "once, instead of --explore's one-knob-at-a-time step."
+    ),
+)
+@click.option(
+    "--optimize",
+    is_flag=True,
+    help=(
+        "With --joint, suggest one untried combination scored by a response surface fitted to "
+        "tried combos (falls back to --search's heuristic when there isn't enough data to fit "
+        "one). Tracks suggestions in the database so a pending one isn't repeated."
     ),
 )
 @click.option(
@@ -775,6 +815,7 @@ def recommend(
     joint: bool,
     explore: bool,
     search: bool,
+    optimize: bool,
     max_candidates: int,
     latency_budget_ms: Optional[float],
     ttft_budget_ms: Optional[float],
@@ -797,8 +838,10 @@ def recommend(
         raise click.UsageError("--explore requires --joint.")
     if search and not joint:
         raise click.UsageError("--search requires --joint.")
-    if search and explore:
-        raise click.UsageError("--search and --explore cannot be used together.")
+    if optimize and not joint:
+        raise click.UsageError("--optimize requires --joint.")
+    if sum((search, explore, optimize)) > 1:
+        raise click.UsageError("--search, --explore, and --optimize cannot be used together.")
 
     with ExperimentDB(db_path) as db:
         experiments = db.list_experiments(scenario=scenario)
@@ -817,6 +860,7 @@ def recommend(
             knobs=list(knobs),
             explore=explore,
             search=search,
+            optimize=optimize,
             max_candidates=max_candidates,
             latency_budget_ms=latency_budget_ms,
             ttft_budget_ms=ttft_budget_ms,
@@ -825,6 +869,7 @@ def recommend(
             max_failure_rate=max_failure_rate,
             derive_from=derive_from,
             out_config=out_config,
+            db_path=db_path,
         )
         return
 
