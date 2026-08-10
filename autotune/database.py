@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS dse_trials (
 );
 """
 
+SEARCH_SUGGESTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS search_suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    knobs_key TEXT NOT NULL,
+    suggested_json TEXT NOT NULL,
+    predicted_efficiency REAL,
+    resolved_experiment_id INTEGER REFERENCES experiments(id),
+    actual_efficiency REAL
+);
+"""
+
 
 @dataclass
 class Experiment:
@@ -74,6 +86,29 @@ class Experiment:
 
 
 @dataclass
+class SuggestionRecord:
+    id: Optional[int]
+    created_at: Optional[str]
+    knobs: list[str]
+    suggested_values: dict[str, float]
+    predicted_efficiency: Optional[float]
+    resolved_experiment_id: Optional[int]
+    actual_efficiency: Optional[float]
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "SuggestionRecord":
+        return cls(
+            id=row["id"],
+            created_at=row["created_at"],
+            knobs=row["knobs_key"].split(","),
+            suggested_values=json.loads(row["suggested_json"]),
+            predicted_efficiency=row["predicted_efficiency"],
+            resolved_experiment_id=row["resolved_experiment_id"],
+            actual_efficiency=row["actual_efficiency"],
+        )
+
+
+@dataclass
 class DSETrialRow:
     id: Optional[int]
     experiment_id: int
@@ -103,6 +138,7 @@ class ExperimentDB:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(SCHEMA)
         self._conn.execute(DSE_TRIALS_SCHEMA)
+        self._conn.execute(SEARCH_SUGGESTIONS_SCHEMA)
         self._ensure_columns()
         self._conn.commit()
 
@@ -203,3 +239,38 @@ class ExperimentDB:
             "SELECT * FROM dse_trials WHERE experiment_id = ? ORDER BY step", (experiment_id,)
         ).fetchall()
         return [DSETrialRow.from_row(row) for row in rows]
+
+    def add_suggestion(
+        self,
+        knobs: list[str],
+        suggested_values: dict[str, Any],
+        predicted_efficiency: Optional[float],
+    ) -> int:
+        cur = self._conn.execute(
+            """
+            INSERT INTO search_suggestions (knobs_key, suggested_json, predicted_efficiency)
+            VALUES (?, ?, ?)
+            """,
+            (",".join(sorted(knobs)), json.dumps(suggested_values), predicted_efficiency),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_suggestions(self, knobs: list[str]) -> list[SuggestionRecord]:
+        """Suggestions previously recorded for this exact set of knobs, order-independent."""
+        rows = self._conn.execute(
+            "SELECT * FROM search_suggestions WHERE knobs_key = ? ORDER BY id",
+            (",".join(sorted(knobs)),),
+        ).fetchall()
+        return [SuggestionRecord.from_row(row) for row in rows]
+
+    def resolve_suggestion(self, suggestion_id: int, experiment_id: int, actual_efficiency: float) -> None:
+        self._conn.execute(
+            """
+            UPDATE search_suggestions
+            SET resolved_experiment_id = ?, actual_efficiency = ?
+            WHERE id = ?
+            """,
+            (experiment_id, actual_efficiency, suggestion_id),
+        )
+        self._conn.commit()

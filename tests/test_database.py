@@ -171,3 +171,67 @@ def test_get_dse_trials_for_experiment_with_no_trials_is_empty(tmp_path):
         assert db.get_dse_trials(exp_id) == []
     finally:
         db.close()
+
+
+def test_add_and_list_suggestions(tmp_path):
+    db = ExperimentDB(tmp_path / "test.db")
+    try:
+        db.add_suggestion(
+            knobs=["serving.batch_size", "serving.num_requests"],
+            suggested_values={"serving.batch_size": 8, "serving.num_requests": 400},
+            predicted_efficiency=2.85,
+        )
+
+        suggestions = db.list_suggestions(["serving.batch_size", "serving.num_requests"])
+
+        assert len(suggestions) == 1
+        assert suggestions[0].suggested_values == {"serving.batch_size": 8, "serving.num_requests": 400}
+        assert suggestions[0].predicted_efficiency == 2.85
+        assert suggestions[0].resolved_experiment_id is None
+        assert suggestions[0].actual_efficiency is None
+    finally:
+        db.close()
+
+
+def test_list_suggestions_is_independent_of_knob_order(tmp_path):
+    db = ExperimentDB(tmp_path / "test.db")
+    try:
+        db.add_suggestion(
+            knobs=["serving.num_requests", "serving.batch_size"],
+            suggested_values={"serving.batch_size": 8, "serving.num_requests": 400},
+            predicted_efficiency=None,
+        )
+
+        assert len(db.list_suggestions(["serving.batch_size", "serving.num_requests"])) == 1
+        assert len(db.list_suggestions(["serving.num_requests", "serving.batch_size"])) == 1
+    finally:
+        db.close()
+
+
+def test_list_suggestions_only_returns_matching_knob_sets(tmp_path):
+    db = ExperimentDB(tmp_path / "test.db")
+    try:
+        db.add_suggestion(
+            knobs=["serving.batch_size"], suggested_values={"serving.batch_size": 8}, predicted_efficiency=None
+        )
+
+        assert db.list_suggestions(["serving.batch_size", "serving.num_requests"]) == []
+    finally:
+        db.close()
+
+
+def test_resolve_suggestion(tmp_path):
+    db = ExperimentDB(tmp_path / "test.db")
+    try:
+        exp_id = db.add_experiment(scenario="s", backend="vllm", config_path="c.toml", config={})
+        suggestion_id = db.add_suggestion(
+            knobs=["serving.batch_size"], suggested_values={"serving.batch_size": 8}, predicted_efficiency=2.5
+        )
+
+        db.resolve_suggestion(suggestion_id, exp_id, actual_efficiency=2.1)
+
+        resolved = db.list_suggestions(["serving.batch_size"])[0]
+        assert resolved.resolved_experiment_id == exp_id
+        assert resolved.actual_efficiency == 2.1
+    finally:
+        db.close()

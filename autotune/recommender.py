@@ -474,54 +474,17 @@ def suggest_joint_step(
         f"Best combo tried so far is {combo_desc} ({joint.best.throughput:.0f} tok/s @ {joint.best.latency:.0f}ms)."
     )
 
-    # Per knob: an isolated "up" and "down" untried candidate value, plus which direction (if
-    # either) recommend_next's isolated trend actually favors.
-    isolated_tried: dict[str, set[Optional[float]]] = {}
-    for knob in knobs:
-        other_knobs = [k for k in knobs if k != knob]
-        isolated_tried[knob] = {
-            _knob_value(e, knob)
-            for e in experiments
-            if all(_knob_value(e, other) == joint.best.values[other] for other in other_knobs)
-        }
-
-    up: dict[str, Optional[float]] = {}
-    down: dict[str, Optional[float]] = {}
+    # Which direction (if either) recommend_next's isolated trend actually favors, per knob.
     promising_up: dict[str, Optional[bool]] = {}
     for knob in knobs:
         current = joint.best.values[knob]
-        up[knob] = _next_higher_untried(current, isolated_tried[knob])
-        down[knob] = _next_lower_untried(current, isolated_tried[knob])
         suggested_value = per_knob[knob].suggested_value
         if suggested_value is None or suggested_value == current:
             promising_up[knob] = None
         else:
             promising_up[knob] = suggested_value > current
 
-    neighborhood: list[dict[str, float]] = []
-    for choices in itertools.product(("current", "up", "down"), repeat=len(knobs)):
-        if all(choice == "current" for choice in choices):
-            continue  # the best combo itself, not a new suggestion
-        candidate: dict[str, float] = {}
-        skip = False
-        for knob, choice in zip(knobs, choices, strict=True):
-            if choice == "current":
-                candidate[knob] = joint.best.values[knob]
-            elif choice == "up":
-                if up[knob] is None:
-                    skip = True
-                    break
-                candidate[knob] = up[knob]
-            else:
-                if down[knob] is None:
-                    skip = True
-                    break
-                candidate[knob] = down[knob]
-        if skip:
-            continue
-        if tuple(candidate[k] for k in knobs) in tried_values:
-            continue
-        neighborhood.append(candidate)
+    neighborhood = _bounded_neighborhood(experiments, knobs, joint.best.values, tried_values)
 
     if not neighborhood:
         return ExploreRecommendation(
@@ -569,6 +532,64 @@ def suggest_joint_step(
             f"(kept top {len(neighborhood)}). Best candidate changes {changes_desc}."
         ),
     )
+
+
+def _bounded_neighborhood(
+    experiments: list[Experiment],
+    knobs: list[str],
+    best_values: dict[str, float],
+    tried_values: set[tuple[Optional[float], ...]],
+) -> list[dict[str, float]]:
+    """Untried combos in a bounded neighborhood around `best_values`.
+
+    For each knob, finds one "up" and one "down" untried candidate value (isolated to
+    experiments matching `best_values` on every *other* knob), then combines them across all
+    knobs via `itertools.product`. Excludes the all-"current" combo (`best_values` itself) and
+    anything already in `tried_values`. Shared by `suggest_joint_step` (heuristic trend scoring)
+    and `optimizer.suggest_joint_optimize` (fitted response-surface scoring) — the neighborhood
+    is the same, only how candidates are scored differs.
+    """
+    isolated_tried: dict[str, set[Optional[float]]] = {}
+    for knob in knobs:
+        other_knobs = [k for k in knobs if k != knob]
+        isolated_tried[knob] = {
+            _knob_value(e, knob)
+            for e in experiments
+            if all(_knob_value(e, other) == best_values[other] for other in other_knobs)
+        }
+
+    up: dict[str, Optional[float]] = {}
+    down: dict[str, Optional[float]] = {}
+    for knob in knobs:
+        current = best_values[knob]
+        up[knob] = _next_higher_untried(current, isolated_tried[knob])
+        down[knob] = _next_lower_untried(current, isolated_tried[knob])
+
+    neighborhood: list[dict[str, float]] = []
+    for choices in itertools.product(("current", "up", "down"), repeat=len(knobs)):
+        if all(choice == "current" for choice in choices):
+            continue  # the best combo itself, not a new suggestion
+        candidate: dict[str, float] = {}
+        skip = False
+        for knob, choice in zip(knobs, choices, strict=True):
+            if choice == "current":
+                candidate[knob] = best_values[knob]
+            elif choice == "up":
+                if up[knob] is None:
+                    skip = True
+                    break
+                candidate[knob] = up[knob]
+            else:
+                if down[knob] is None:
+                    skip = True
+                    break
+                candidate[knob] = down[knob]
+        if skip:
+            continue
+        if tuple(candidate[k] for k in knobs) in tried_values:
+            continue
+        neighborhood.append(candidate)
+    return neighborhood
 
 
 def _isolated_per_knob_recommendations(

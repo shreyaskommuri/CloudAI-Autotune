@@ -4,6 +4,7 @@ from click.testing import CliRunner
 
 from autotune import config_mutator
 from autotune.cli import cli
+from autotune.database import ExperimentDB
 
 
 def test_ingest_records_existing_report_and_recommendation(tmp_path):
@@ -478,7 +479,7 @@ def test_recommend_search_and_explore_are_mutually_exclusive(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert "--search and --explore cannot be used together" in result.output
+    assert "--search, --explore, and --optimize cannot be used together" in result.output
 
 
 def test_recommend_search_can_suggest_a_multi_knob_move(tmp_path):
@@ -543,6 +544,109 @@ def test_recommend_search_respects_max_candidates(tmp_path):
 
     assert result.exit_code == 0
     assert "kept top 1" in result.output
+
+
+def test_recommend_optimize_requires_joint(tmp_path):
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["recommend", "--db", str(tmp_path / "demo.db"), "--knob", "serving.batch_size", "--optimize"],
+    )
+
+    assert result.exit_code != 0
+    assert "--optimize requires --joint" in result.output
+
+
+def test_recommend_optimize_falls_back_with_insufficient_data(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+
+    _ingest_combo(runner, db_path, 1, 100, "reports/examples/vllm_batch1.json")
+    _ingest_combo(runner, db_path, 4, 100, "reports/examples/vllm_batch4.json")
+    _ingest_combo(runner, db_path, 4, 200, "reports/examples/vllm_batch8.json")
+
+    result = runner.invoke(
+        cli,
+        [
+            "recommend",
+            "--db",
+            str(db_path),
+            "--scenario",
+            "manual_vllm",
+            "--knob",
+            "serving.batch_size",
+            "--knob",
+            "serving.num_requests",
+            "--joint",
+            "--optimize",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Optimize reason:" in result.output
+    assert "Falling back to trend-based search" in result.output
+    assert "Suggested untried combo:" in result.output
+    assert "Predicted efficiency:" not in result.output
+
+
+def _ingest_rich_combos(runner, db_path):
+    combos = [
+        (1, 100, "reports/examples/vllm_batch1.json"),
+        (2, 100, "reports/examples/vllm_batch4.json"),
+        (4, 100, "reports/examples/vllm_batch8.json"),
+        (1, 200, "reports/examples/vllm_batch1.json"),
+        (2, 200, "reports/examples/vllm_batch4.json"),
+        (4, 200, "reports/examples/vllm_batch8.json"),
+        (8, 200, "reports/examples/vllm_batch8.json"),
+        (2, 400, "reports/examples/vllm_batch4.json"),
+    ]
+    for batch_size, num_requests, report in combos:
+        _ingest_combo(runner, db_path, batch_size, num_requests, report)
+
+
+def test_recommend_optimize_fits_a_surface_and_persists_the_suggestion(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    _ingest_rich_combos(runner, db_path)
+
+    args = [
+        "recommend",
+        "--db",
+        str(db_path),
+        "--scenario",
+        "manual_vllm",
+        "--knob",
+        "serving.batch_size",
+        "--knob",
+        "serving.num_requests",
+        "--joint",
+        "--optimize",
+    ]
+
+    first = runner.invoke(cli, args)
+    assert first.exit_code == 0
+    assert "Fitted a response surface" in first.output
+    assert "Predicted efficiency:" in first.output
+
+    with ExperimentDB(db_path) as db:
+        suggestions = db.list_suggestions(["serving.batch_size", "serving.num_requests"])
+    assert len(suggestions) == 1
+    assert suggestions[0].resolved_experiment_id is None
+
+    # A second call, without running the suggested combo in between, must not repeat it.
+    second = runner.invoke(cli, args)
+    assert second.exit_code == 0
+
+    def _suggested_combo(output):
+        line = next(line for line in output.splitlines() if line.startswith("Suggested untried combo:"))
+        return line
+
+    assert _suggested_combo(first.output) != _suggested_combo(second.output)
+
+    with ExperimentDB(db_path) as db:
+        suggestions = db.list_suggestions(["serving.batch_size", "serving.num_requests"])
+    assert len(suggestions) == 2
 
 
 def test_ingest_records_notes_for_experiment_context(tmp_path):
