@@ -181,4 +181,6 @@ def _failure_rate_from_counts(flat: dict[str, Any]) -> Optional[float]:
     total = _to_float(flat.get("num_prompts"))
     if completed is None or total in (None, 0):
         return None
-    return max(0.0, min(1.0, 1.0 - completed / total))
+    # Round off IEEE754 division noise (e.g. 1.0 - 97/100 == 0.030000000000000027) so exports
+    # and budget comparisons (a strict > against a user-supplied limit) see a clean value.
+    return round(max(0.0, min(1.0, 1.0 - completed / total)), 6)

@@ -1079,7 +1079,7 @@ def test_ingest_accepts_cloudai_sglang_jsonl_report(tmp_path):
 
     assert result.exit_code == 0
     assert "throughput_tokens_per_sec': 42.5" in result.output
-    assert "failure_rate': 0.030000" in result.output
+    assert "failure_rate': 0.03," in result.output
 
 
 def test_recommend_handles_ingested_report_without_usable_metrics(tmp_path):
