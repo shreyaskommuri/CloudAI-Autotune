@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from autotune.parser import parse_report
 
 
@@ -66,7 +64,21 @@ def test_parse_cloudai_sglang_jsonl_report(tmp_path):
     assert metrics["throughput_tokens_per_sec"] == 42.5
     assert metrics["latency_ms"] is None
     assert metrics["ttft_ms"] == 18.2
-    assert metrics["failure_rate"] == pytest.approx(0.03)
+    assert metrics["failure_rate"] == 0.03
+
+
+def test_failure_rate_from_counts_has_no_ieee754_division_noise(tmp_path):
+    """1.0 - 97/100 is 0.030000000000000027 in raw float64, not 0.03. A raw value like that
+    would both display ugly in exports and could wrongly fail a budget check of exactly 0.03
+    due to a strict `>` comparison. The computed rate must round cleanly."""
+    report = {"request_throughput": 1.0, "num_prompts": 100, "completed": 97}
+    path = tmp_path / "report.jsonl"
+    path.write_text("\n" + json.dumps(report) + "\n")
+
+    metrics = parse_report(path)
+
+    assert metrics["failure_rate"] == 0.03
+    assert repr(metrics["failure_rate"]) == "0.03"
 
 
 def test_parse_jsonl_uses_summary_line_when_earlier_lines_are_events(tmp_path):
@@ -85,7 +97,7 @@ def test_parse_jsonl_uses_summary_line_when_earlier_lines_are_events(tmp_path):
     assert metrics["throughput_tokens_per_sec"] == 42.5
     assert metrics["latency_ms"] is None
     assert metrics["ttft_ms"] == 18.2
-    assert metrics["failure_rate"] == pytest.approx(0.03)
+    assert metrics["failure_rate"] == 0.03
 
 
 def test_parse_json_array_uses_summary_object_when_earlier_objects_are_events(tmp_path):
@@ -104,7 +116,7 @@ def test_parse_json_array_uses_summary_object_when_earlier_objects_are_events(tm
     assert metrics["throughput_tokens_per_sec"] == 42.5
     assert metrics["latency_ms"] is None
     assert metrics["ttft_ms"] == 18.2
-    assert metrics["failure_rate"] == pytest.approx(0.03)
+    assert metrics["failure_rate"] == 0.03
 
 
 def test_parse_sglang_latency_alias_separates_latency_from_ttft(tmp_path):
