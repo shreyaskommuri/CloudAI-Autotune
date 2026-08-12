@@ -16,7 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from autotune.comparison import compare_best_and_latest, compare_latest_to_previous
 from autotune.database import DEFAULT_DB_PATH, ExperimentDB
-from autotune.recommender import DEFAULT_KNOB, recommend_next
+from autotune.optimizer import resolve_pending_suggestions, suggest_joint_optimize
+from autotune.recommender import (
+    DEFAULT_KNOB,
+    discover_knobs,
+    format_combo,
+    recommend_joint,
+    recommend_next,
+    suggest_joint_step,
+    suggest_untried_combo,
+)
 
 
 def _format_number(value: object, suffix: str = "") -> str | None:
@@ -166,6 +175,96 @@ with ExperimentDB(db_path) as db:
 
 st.metric(label=f"Suggested next value for `{rec.knob}`", value=str(rec.suggested_value), delta=str(rec.current_value))
 st.write(rec.reason)
+
+st.subheader("Multi-knob recommendation")
+available_knobs = discover_knobs(filtered)
+selected_knobs = st.multiselect("Knobs to consider jointly", options=available_knobs)
+
+joint_budgets = {
+    "latency_budget_ms": budget,
+    "ttft_budget_ms": ttft_budget if ttft_budget > 0 else None,
+    "min_throughput_tokens_per_sec": min_throughput if min_throughput > 0 else None,
+    "runtime_budget_sec": runtime_budget if runtime_budget > 0 else None,
+    "max_failure_rate": max_failure_rate if max_failure_rate > 0 else None,
+}
+
+if len(selected_knobs) < 2:
+    st.caption("Select at least two knobs above to see a joint recommendation.")
+else:
+    joint = recommend_joint(filtered, knobs=selected_knobs, **joint_budgets)
+    st.write(joint.reason)
+
+    if joint.best is not None:
+        st.metric(
+            label=f"Best combo: {format_combo(joint.best.values)}",
+            value=f"{joint.best.throughput:g} tok/s",
+            delta=f"{joint.best.latency:g} ms latency",
+        )
+        frontier_rows = [
+            {
+                **combo.values,
+                "throughput_tokens_per_sec": combo.throughput,
+                "latency_ms": combo.latency,
+                "efficiency": combo.efficiency,
+            }
+            for combo in joint.frontier
+        ]
+        st.write("Pareto frontier (not beaten on both throughput and latency by another combo):")
+        st.dataframe(pd.DataFrame(frontier_rows), width="stretch", hide_index=True)
+
+    with ExperimentDB(db_path) as db:
+        pending = db.list_suggestions(selected_knobs)
+        resolutions = resolve_pending_suggestions(filtered, selected_knobs, pending)
+        for suggestion_id, experiment_id, actual_efficiency in resolutions:
+            db.resolve_suggestion(suggestion_id, experiment_id, actual_efficiency)
+        if resolutions:
+            pending = db.list_suggestions(selected_knobs)
+
+    mode = st.radio("Suggest an untried combination via", ["Explore", "Search", "Optimize"], horizontal=True)
+
+    if mode == "Explore":
+        explore_rec = suggest_untried_combo(filtered, knobs=selected_knobs, **joint_budgets)
+        st.write(explore_rec.reason)
+        if explore_rec.suggested is not None:
+            st.write(f"Suggested untried combo: {format_combo(explore_rec.suggested)}")
+    elif mode == "Search":
+        search_rec = suggest_joint_step(filtered, knobs=selected_knobs, **joint_budgets)
+        st.write(search_rec.reason)
+        if search_rec.suggested is not None:
+            st.write(f"Suggested untried combo: {format_combo(search_rec.suggested)}")
+    else:
+        optimize_rec = suggest_joint_optimize(
+            filtered, knobs=selected_knobs, pending_suggestions=pending, **joint_budgets
+        )
+        st.write(optimize_rec.reason)
+        if optimize_rec.suggested is not None:
+            st.write(f"Suggested untried combo: {format_combo(optimize_rec.suggested)}")
+            if optimize_rec.predicted_efficiency is not None:
+                st.write(f"Predicted efficiency: {optimize_rec.predicted_efficiency:.4f} tok/s per ms")
+            if st.button("Record this suggestion"):
+                with ExperimentDB(db_path) as db:
+                    db.add_suggestion(selected_knobs, optimize_rec.suggested, optimize_rec.predicted_efficiency)
+                st.success("Recorded. It won't be suggested again until it's actually run and ingested.")
+
+    # Re-fetch rather than reuse `pending`: a button click just above may have recorded a new
+    # suggestion this same run, and this table should reflect that immediately, not next rerun.
+    st.write("Suggestion history for this knob set:")
+    with ExperimentDB(db_path) as db:
+        history = db.list_suggestions(selected_knobs)
+    if not history:
+        st.caption("No suggestions recorded yet. Use Optimize mode above and click Record to start tracking one.")
+    else:
+        history_rows = [
+            {
+                **suggestion.suggested_values,
+                "predicted_efficiency": suggestion.predicted_efficiency,
+                "status": "Resolved" if suggestion.resolved_experiment_id is not None else "Pending",
+                "actual_efficiency": suggestion.actual_efficiency,
+                "created_at": suggestion.created_at,
+            }
+            for suggestion in history
+        ]
+        st.dataframe(pd.DataFrame(history_rows), width="stretch", hide_index=True)
 
 dse_experiments = [e for e in filtered if e.backend == "cloudai-dse"]
 if dse_experiments:
