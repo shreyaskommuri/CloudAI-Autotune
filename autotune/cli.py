@@ -519,7 +519,11 @@ def ingest_dse(results_dir: Path, db_path: str, scenario: Optional[str]) -> None
 
     with ExperimentDB(db_path) as db:
         for trajectory_path in trajectory_paths:
-            trials = parse_trajectory(trajectory_path)
+            try:
+                trials = parse_trajectory(trajectory_path)
+            except (KeyError, ValueError) as exc:
+                click.echo(f"Skipping {trajectory_path}: could not parse trajectory ({exc}).")
+                continue
             if not trials:
                 continue
 

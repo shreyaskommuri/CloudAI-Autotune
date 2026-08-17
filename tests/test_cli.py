@@ -1406,3 +1406,62 @@ def test_ingest_dse_reports_when_no_trajectories_found(tmp_path):
 
     assert result.exit_code == 0
     assert "No trajectory.csv files found" in result.output
+
+
+def _write_malformed_trajectory(results_dir: Path, test_name: str, content: str) -> None:
+    trajectory_dir = results_dir / test_name / "0"
+    trajectory_dir.mkdir(parents=True)
+    (trajectory_dir / "trajectory.csv").write_text(content)
+
+
+def test_ingest_dse_skips_a_trajectory_missing_the_reward_column_instead_of_crashing(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    results_dir = tmp_path / "results"
+    _write_malformed_trajectory(
+        results_dir, "broken_sweep", "step,action,observation\n1,\"{'batch_size': 1}\",[100.0]\n"
+    )
+
+    result = runner.invoke(cli, ["ingest-dse", str(results_dir), "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "Skipping" in result.output
+    assert "could not parse trajectory" in result.output
+    listed = runner.invoke(cli, ["list", "--db", str(db_path)])
+    assert "broken_sweep" not in listed.output
+
+
+def test_ingest_dse_skips_a_trajectory_with_a_non_numeric_reward(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    results_dir = tmp_path / "results"
+    _write_malformed_trajectory(
+        results_dir, "broken_sweep", "step,action,reward,observation\n1,\"{'batch_size': 1}\",not_a_number,[100.0]\n"
+    )
+
+    result = runner.invoke(cli, ["ingest-dse", str(results_dir), "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "Skipping" in result.output
+
+
+def test_ingest_dse_continues_past_a_malformed_file_to_ingest_the_rest_of_the_batch(tmp_path):
+    """A malformed trajectory.csv anywhere in the batch must not abort ingestion of the other,
+    well-formed files - this is what silently broke before the fix (an uncaught KeyError from
+    pandas propagated straight out of the whole command)."""
+    runner = CliRunner()
+    db_path = tmp_path / "demo.db"
+    results_dir = tmp_path / "results"
+    _write_malformed_trajectory(
+        results_dir, "broken_sweep", "step,action,observation\n1,\"{'batch_size': 1}\",[100.0]\n"
+    )
+    _write_trajectory(results_dir, "good_sweep")
+
+    result = runner.invoke(cli, ["ingest-dse", str(results_dir), "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "Skipping" in result.output
+    assert "ingested 2 trials" in result.output
+    listed = runner.invoke(cli, ["list", "--db", str(db_path)])
+    assert "good_sweep" in listed.output
+    assert "broken_sweep" not in listed.output
