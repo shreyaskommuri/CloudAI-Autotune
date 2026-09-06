@@ -3,8 +3,12 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from autotune import config_mutator
 from autotune.database import ExperimentDB
 from autotune.dse import DSETrial
+from autotune.optimizer import suggest_joint_optimize
+
+BASE_CONFIG_PATH = str(Path(__file__).resolve().parent.parent / "configs" / "examples" / "vllm_baseline.toml")
 
 DASHBOARD_PATH = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
 
@@ -295,3 +299,67 @@ def test_suggestion_history_resolves_regardless_of_active_mode(multi_knob_db: Pa
     history = _history_dataframe(at)
     assert history.iloc[0]["status"] == "Resolved"
     assert history.iloc[0]["actual_efficiency"] is not None
+
+
+def test_derive_config_prompts_when_paths_are_missing(multi_knob_db: Path):
+    at = _load_with_knobs_selected(multi_knob_db)
+
+    assert not at.exception
+    captions = [caption.value for caption in at.main.caption]
+    assert any("Enter both a base config path and an output path" in caption for caption in captions)
+    assert len(at.main.button) == 0
+
+
+def test_derive_config_writes_file_on_button_click(multi_knob_db: Path, tmp_path: Path):
+    out_config = tmp_path / "derived.toml"
+    knobs = ["serving.batch_size", "serving.num_requests"]
+    with ExperimentDB(multi_knob_db) as db:
+        expected = suggest_joint_optimize(db.list_experiments(), knobs=knobs)
+    assert expected.suggested is not None, "fixture should produce an Optimize suggestion"
+
+    at = _load_with_knobs_selected(multi_knob_db)
+    at.main.radio[0].set_value("Optimize")
+    at.run(timeout=30)
+    at.main.text_input[0].set_value(BASE_CONFIG_PATH)
+    at.main.text_input[1].set_value(str(out_config))
+    at.run(timeout=30)
+    # In Optimize mode, button[0] is "Record this suggestion"; ours is button[1].
+    at.main.button[1].click()
+    at.run(timeout=30)
+
+    assert not at.exception
+    written = config_mutator.load_config(out_config)
+    assert written["serving"]["batch_size"] == expected.suggested["serving.batch_size"]
+    assert written["serving"]["num_requests"] == expected.suggested["serving.num_requests"]
+    # untouched base keys must survive the merge
+    assert written["model"]["name"] == "meta-llama/Llama-3-8b"
+
+
+def test_derive_config_shows_error_for_missing_base_config(multi_knob_db: Path, tmp_path: Path):
+    at = _load_with_knobs_selected(multi_knob_db)
+    at.main.radio[0].set_value("Explore")
+    at.run(timeout=30)
+    at.main.text_input[0].set_value(str(tmp_path / "does-not-exist.toml"))
+    at.main.text_input[1].set_value(str(tmp_path / "out.toml"))
+    at.run(timeout=30)
+    at.main.button[0].click()
+    at.run(timeout=30)
+
+    assert not at.exception
+    errors = [error.value for error in at.main.error]
+    assert any("Base config not found" in error for error in errors)
+
+
+def test_derive_config_section_available_outside_optimize_mode(multi_knob_db: Path, tmp_path: Path):
+    out_config = tmp_path / "derived.toml"
+    at = _load_with_knobs_selected(multi_knob_db)
+    at.main.radio[0].set_value("Search")
+    at.run(timeout=30)
+    at.main.text_input[0].set_value(BASE_CONFIG_PATH)
+    at.main.text_input[1].set_value(str(out_config))
+    at.run(timeout=30)
+    at.main.button[0].click()
+    at.run(timeout=30)
+
+    assert not at.exception
+    assert out_config.exists()
