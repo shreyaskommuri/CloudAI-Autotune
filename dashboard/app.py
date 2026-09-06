@@ -14,6 +14,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from autotune import config_mutator
 from autotune.comparison import compare_best_and_latest, compare_latest_to_previous
 from autotune.database import DEFAULT_DB_PATH, ExperimentDB
 from autotune.optimizer import resolve_pending_suggestions, suggest_joint_optimize
@@ -222,16 +223,19 @@ else:
 
     mode = st.radio("Suggest an untried combination via", ["Explore", "Search", "Optimize"], horizontal=True)
 
+    combo_to_write = None
     if mode == "Explore":
         explore_rec = suggest_untried_combo(filtered, knobs=selected_knobs, **joint_budgets)
         st.write(explore_rec.reason)
         if explore_rec.suggested is not None:
             st.write(f"Suggested untried combo: {format_combo(explore_rec.suggested)}")
+            combo_to_write = explore_rec.suggested
     elif mode == "Search":
         search_rec = suggest_joint_step(filtered, knobs=selected_knobs, **joint_budgets)
         st.write(search_rec.reason)
         if search_rec.suggested is not None:
             st.write(f"Suggested untried combo: {format_combo(search_rec.suggested)}")
+            combo_to_write = search_rec.suggested
     else:
         optimize_rec = suggest_joint_optimize(
             filtered, knobs=selected_knobs, pending_suggestions=pending, **joint_budgets
@@ -245,6 +249,21 @@ else:
                 with ExperimentDB(db_path) as db:
                     db.add_suggestion(selected_knobs, optimize_rec.suggested, optimize_rec.predicted_efficiency)
                 st.success("Recorded. It won't be suggested again until it's actually run and ingested.")
+            combo_to_write = optimize_rec.suggested
+
+    st.write("Derive a config from this suggestion:")
+    base_config_path = st.text_input("Base config path", key="derive_base_config")
+    out_config_path = st.text_input("Output config path", key="derive_out_config")
+    if combo_to_write is None:
+        st.caption("No suggested combo available yet to derive a config from.")
+    elif not base_config_path or not out_config_path:
+        st.caption("Enter both a base config path and an output path to enable writing.")
+    elif st.button("Write derived config"):
+        try:
+            written = config_mutator.derive_config(base_config_path, combo_to_write, out_config_path)
+            st.success(f"Wrote derived config to {written}")
+        except FileNotFoundError:
+            st.error(f"Base config not found: {base_config_path}")
 
     # Re-fetch rather than reuse `pending`: a button click just above may have recorded a new
     # suggestion this same run, and this table should reflect that immediately, not next rerun.
