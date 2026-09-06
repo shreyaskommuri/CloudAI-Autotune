@@ -476,9 +476,14 @@ streamlit run dashboard/app.py
 
 The dashboard reads the local SQLite database and shows experiment history,
 best/latest run comparison, a regression check against the immediately
-preceding run, metric charts, and the current recommendation. If any ingested
-runs came from `ingest-dse`, a "DSE sweeps" section also shows a reward-per-trial
-chart and the best action found for a selected sweep.
+preceding run, metric charts, and the current recommendation. A "Multi-knob
+recommendation" section reports the best combo tried so far across two or
+more knobs (plus the Pareto frontier), suggests an untried combo via
+Explore/Search/Optimize mode, and can write that suggested or best combo out
+to a real config file (same underlying logic as the CLI's `--derive-from`/
+`--out-config`) once a base config path and an output path are entered. If
+any ingested runs came from `ingest-dse`, a "DSE sweeps" section also shows a
+reward-per-trial chart and the best action found for a selected sweep.
 
 ## Development
 
@@ -548,8 +553,11 @@ Suggestions are tracked in a `search_suggestions` table so a pending
 untried combo isn't suggested twice; once it's actually run, the outcome
 becomes a normal completed experiment and is included in the next fit, which
 is how a bad suggestion feeds back into future ones without any separate
-demotion logic. Kept local-first by design, not a target with an end state —
-every new item below should keep working with zero services.
+demotion logic. The dashboard's multi-knob section now also has a
+derive-config button, so a suggested or best combo can be written to a real
+config file straight from the UI instead of needing the CLI. Kept
+local-first by design, not a target with an end state — every new item below
+should keep working with zero services.
 
 ### Later — needs your input before any code gets written
 
