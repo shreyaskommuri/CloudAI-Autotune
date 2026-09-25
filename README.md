@@ -561,16 +561,30 @@ should keep working with zero services.
 
 ### Later — needs your input before any code gets written
 
-- **Contributing improvements back to CloudAI itself.** Autotune's own
-  multi-knob search work (`--joint`, `--explore`, `--search`, `--optimize`)
-  duplicates capability CloudAI's own DSE stack could have natively:
-  `configurator/base_agent.py` defines a generic, pluggable agent interface,
-  but `GridSearchAgent` (exhaustive grid search) is the only implementation
-  that ships, and `report_generator/dse_report.py` only ever reports a single
-  scalar "best" step, no Pareto frontier across competing metrics. Porting
-  the fitted-surface search from `--optimize` into a new `BaseAgent`
-  implementation, and porting `--joint`'s Pareto frontier into `DSEReport`,
-  are both real upstream candidates now that there's working, tested logic to
-  point to instead of a bare proposal — not started, needs scoping as its own
-  design conversation (and its own maintainer back-and-forth, separate from
-  the in-flight lazy-loading/`[[Definitions]]` parser work).
+- **Porting search/reporting logic into CloudAI core — resolved, not
+  pursuing.** Two upstream proposals were floated for exactly this: a new
+  `BaseAgent` implementation ported from `--optimize`'s fitted-surface search
+  (issue #993), and a Pareto frontier in `report_generator/dse_report.py`
+  ported from `--joint` (issue #997). Both were declined by CloudAI
+  maintainers for the same reason: NVIDIA has internal, unreleased
+  equivalents for both search agents and DSE reporting, and deliberately
+  keeps the public repo without either ("we deliberately don't include any
+  real agents in this repo (even simple ones), product decision" / "I think
+  this is private too"). This isn't a scoping problem a smaller or
+  differently-shaped PR would fix — it's a product decision. Standing rule:
+  do not propose a new `BaseAgent`/search-strategy implementation, or DSE
+  reporting that competes with an internal equivalent, to `NVIDIA/cloudai`,
+  at any size.
+- **Shipping the optimizer as an external CloudAI plugin instead — real,
+  unblocked path.** While scoping #993, found that CloudAI already ships a
+  public, tested plugin mechanism for exactly this:
+  `Registry.add_entrypoint_agent`/`register_entrypoint_agents`
+  (`_core/registry.py`) scans a `cloudai.agents` `importlib.metadata`
+  entry-point group at startup and loads any external package subclassing
+  `BaseAgent` — no core changes needed, and a second maintainer
+  (`srivatsankrishnan`) independently suggested this same path. Packaging
+  `suggest_joint_optimize`/`recommend_next` as an installable
+  `cloudai.agents`-entry-point package is unaffected by the internal-overlap
+  rule above, since it never touches core. Not started — needs its own
+  scoping pass (packaging, versioning against CloudAI's `BaseAgent` contract,
+  whether to keep it inside this repo or split it out).
