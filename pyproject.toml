@@ -13,9 +13,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
+cloudai-agent = ["cloudai @ git+https://github.com/NVIDIA/cloudai.git"]
 
 [project.scripts]
 autotune = "autotune.cli:cli"
+
+[project.entry-points."cloudai.agents"]
+autotune-optimize = "autotune.cloudai_agent:AutotuneOptimizeAgent"
 
 [build-system]
 requires = ["setuptools>=68"]
