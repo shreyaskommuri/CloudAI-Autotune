@@ -559,6 +559,30 @@ config file straight from the UI instead of needing the CLI. Kept
 local-first by design, not a target with an end state — every new item below
 should keep working with zero services.
 
+Also shipped: `AutotuneOptimizeAgent` (`autotune/cloudai_agent.py`), a real
+`cloudai.agents` entry-point plugin that CloudAI discovers at startup with
+zero changes to CloudAI itself (see the "Later" item below for why this
+path, not a core PR). It reuses `_fit_efficiency_surface` and
+`_bounded_neighborhood` as-is, but fits against CloudAI's own per-trial
+`reward` instead of Autotune's throughput/latency-specific efficiency
+formula, so it isn't tied to one workload's named metrics. Verified two
+ways: against mocked `CloudAIGymEnv` fixtures (`tests/test_cloudai_agent.py`,
+same pattern CloudAI's own `test_agents.py` uses for `GridSearchAgent`), and
+against a real `cloudai dry-run` of the bundled, GPU-free `DynamoMocker`
+workload sweeping `kv_transfer_bandwidth`. The real dry-run caught a bug the
+mocks missed: CloudAI's action dict for a nested `cmd_args` field is flat,
+with the full dotted path as one literal string key
+(`{"engine.kv_transfer_bandwidth": 100.0}`), not an actually-nested dict.
+Storing that flat dict directly made `_knob_value`'s dotted-path traversal
+silently return `None` for every trial, which degenerated `tried_values` to
+a single `{(None,)}` entry and let already-tried values repeat — confirmed
+concretely (step 2 picked the same value as step 1, hit CloudAI's own
+trajectory cache). Fixed with `_nest_action`, which expands the flat dotted
+keys into a real nested dict before storing; a second dry-run with the fix
+picked five distinct values across five steps, no repeats. Regression test
+added using a dotted knob name, since every existing mocked test used a
+flat one and so didn't exercise this path.
+
 ### Later — needs your input before any code gets written
 
 - **Porting search/reporting logic into CloudAI core — resolved, not
@@ -575,16 +599,13 @@ should keep working with zero services.
   do not propose a new `BaseAgent`/search-strategy implementation, or DSE
   reporting that competes with an internal equivalent, to `NVIDIA/cloudai`,
   at any size.
-- **Shipping the optimizer as an external CloudAI plugin instead — real,
-  unblocked path.** While scoping #993, found that CloudAI already ships a
-  public, tested plugin mechanism for exactly this:
-  `Registry.add_entrypoint_agent`/`register_entrypoint_agents`
-  (`_core/registry.py`) scans a `cloudai.agents` `importlib.metadata`
-  entry-point group at startup and loads any external package subclassing
-  `BaseAgent` — no core changes needed, and a second maintainer
-  (`srivatsankrishnan`) independently suggested this same path. Packaging
-  `suggest_joint_optimize`/`recommend_next` as an installable
-  `cloudai.agents`-entry-point package is unaffected by the internal-overlap
-  rule above, since it never touches core. Not started — needs its own
-  scoping pass (packaging, versioning against CloudAI's `BaseAgent` contract,
-  whether to keep it inside this repo or split it out).
+- **Shipping the optimizer as an external CloudAI plugin instead — shipped.**
+  While scoping #993, found that CloudAI already ships a public, tested
+  plugin mechanism for exactly this: `Registry.add_entrypoint_agent`/
+  `register_entrypoint_agents` (`_core/registry.py`) scans a `cloudai.agents`
+  `importlib.metadata` entry-point group at startup and loads any external
+  package subclassing `BaseAgent` — no core changes needed, and a second
+  maintainer (`srivatsankrishnan`) independently suggested this same path.
+  Done, see `AutotuneOptimizeAgent` above. Not yet done: a real (non-dry-run)
+  GPU benchmark, to see whether it actually beats `GridSearchAgent` on
+  trials-to-good-config, not just that it runs without crashing.

@@ -140,8 +140,24 @@ class AutotuneOptimizeAgent(BaseAgent):
                 scenario="cloudai-agent",
                 backend="cloudai",
                 config_path="",
-                config=dict(action),
+                config=_nest_action(action),
                 status="completed",
                 metrics={"reward": reward},
             )
         )
+
+
+def _nest_action(action: Dict[str, Any]) -> Dict[str, Any]:
+    """Expand CloudAI's flat, dotted-key action dict (e.g. `{"engine.kv_transfer_bandwidth": 1.0}`,
+    one literal string key per knob) into the nested dict shape `_knob_value` expects (Autotune's
+    own convention, built by `_flatten_config` walking real nested JSON). Without this, a dotted
+    knob name silently resolves to `None` on every lookup, which breaks `tried_values` dedup and
+    `_bounded_neighborhood` for any knob nested under `cmd_args` (i.e. almost every real workload)."""
+    nested: Dict[str, Any] = {}
+    for dotted_key, value in action.items():
+        node = nested
+        parts = dotted_key.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = value
+    return nested
