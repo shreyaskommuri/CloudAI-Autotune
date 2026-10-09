@@ -606,6 +606,36 @@ flat one and so didn't exercise this path.
   `importlib.metadata` entry-point group at startup and loads any external
   package subclassing `BaseAgent` — no core changes needed, and a second
   maintainer (`srivatsankrishnan`) independently suggested this same path.
-  Done, see `AutotuneOptimizeAgent` above. Not yet done: a real (non-dry-run)
-  GPU benchmark, to see whether it actually beats `GridSearchAgent` on
-  trials-to-good-config, not just that it runs without crashing.
+  Done, see `AutotuneOptimizeAgent` above.
+
+  **Trials-to-best, synthetic benchmark only — a real GPU comparison is
+  still not done.** A real (non-dry-run) comparison against
+  `GridSearchAgent` on actual GPU hardware hasn't happened: `DynamoMocker`,
+  the bundled GPU-free workload, still can't run for real on this machine
+  because `ai-dynamo-runtime` (a hard dependency of the `ai-dynamo` package
+  it needs) ships Linux-only wheels, no macOS build at any version.
+  `scripts/compare_cloudai_agent.py` instead feeds the real
+  `AutotuneOptimizeAgent` class a known, noise-free, single-peaked reward
+  curve directly (bypassing CloudAI's runner entirely) and counts
+  trials-to-best against a `GridSearchAgent`-equivalent. Treat these numbers
+  as an optimistic ceiling, not a realistic estimate — a real workload's
+  reward surface will be rougher than a clean quadratic peak. Results (30
+  random seeds per case, `python scripts/compare_cloudai_agent.py`):
+
+  | Case | `GridSearchAgent` | `AutotuneOptimizeAgent` (mean / median) |
+  |---|---|---|
+  | 1 knob, 11 values, peak in the middle | trial 6 | 6.10 / 6.0 |
+  | 1 knob, peak at the start (grid search's best case) | trial 1 | 4.33 / 4.0 |
+  | 1 knob, peak at the end (grid search's worst case) | trial 11 | 6.93 / 7.5 |
+  | 2 knobs, 11x11=121 combos | trial 58 | 47.87 / 37.5 |
+
+  `GridSearchAgent`'s speed is purely a function of where the good value
+  happens to sit in the configured list — great when it's early, terrible
+  when it's late, nothing to do with search skill. `AutotuneOptimizeAgent`
+  doesn't care about list order, so it stays roughly consistent regardless
+  — but it isn't a guaranteed win: with one knob it's close to a tie on
+  average, and with two knobs the advantage is real but noisy (one run
+  found the peak in 1 trial, another took 115 of 121). The two-knob case is
+  the more interesting one — exhaustive grid search's cost grows
+  multiplicatively with every added knob, while the neighborhood-search
+  approach doesn't.
