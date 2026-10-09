@@ -28,10 +28,10 @@ jobs:
         run: python -m pip install --upgrade pip ruff
 
       - name: Run ruff check
-        run: ruff check autotune dashboard tests
+        run: ruff check autotune dashboard scripts tests
 
       - name: Run ruff format --check
-        run: ruff format --check autotune dashboard tests
+        run: ruff format --check autotune dashboard scripts tests
 
   test:
     name: Python ${{ matrix.python-version }}
@@ -60,7 +60,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Compile Python sources
-        run: python -m compileall -q autotune dashboard tests
+        run: python -m compileall -q autotune dashboard scripts tests
 
       - name: Smoke test CLI
         run: autotune --help
