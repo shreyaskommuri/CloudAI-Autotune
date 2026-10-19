@@ -153,7 +153,9 @@ autotune --help
 ```
 
 CloudAI is only required for real benchmark runs. The local demo works without
-CloudAI, GPUs, or cluster access.
+CloudAI, GPUs, or cluster access. To also use Autotune's optimizer as a CloudAI
+agent (see "Use the Optimizer Agent Inside CloudAI" below), install the
+`cloudai-agent` extra instead: `pip install -e ".[cloudai-agent]"`.
 
 ## Quick Demo Without CloudAI
 
@@ -452,6 +454,40 @@ a normal completed experiment and is folded into the next fit, which is how
 a suggestion that turns out wrong changes future ones, without any separate
 demotion logic.
 
+## Use the Optimizer Agent Inside CloudAI
+
+The sections above all run `autotune recommend` as a separate step after a CloudAI run. The
+same fitted-surface optimizer is also available as a real `cloudai.agents` entry point, so
+CloudAI can call it directly during its own DSE sweep, in place of the default
+`grid_search` agent — no CloudAI core changes needed.
+
+Install Autotune with the `cloudai-agent` extra so `cloudai` itself is available:
+
+```bash
+pip install -e ".[cloudai-agent]"
+```
+
+Then point a test definition at it instead of `grid_search`:
+
+```toml
+agent = "autotune-optimize"
+agent_steps = 8          # how many trials the sweep runs; needs >1 to actually search
+agent_reward_function = "inverse"
+
+[cmd_args]
+kv_transfer_bandwidth = [100.0, 200.0, 300.0, 400.0]  # a swept (list-typed) field is required
+```
+
+`agent_steps` and at least one list-typed `cmd_args` field (CloudAI's own sweep mechanism) are
+what give the agent an actual action space to search; a fixed-value `cmd_args` field isn't swept
+at all. CloudAI discovers `autotune-optimize` automatically at startup via the
+`cloudai.agents` entry point (`pyproject.toml`), resolving to `AutotuneOptimizeAgent`
+(`autotune/cloudai_agent.py`). It fits the same quadratic response surface as `--optimize`
+directly against CloudAI's own per-trial `reward` (whatever `agent_reward_function` computes),
+so it works for any workload's action space, not just throughput/latency. `agent_config` isn't
+required; it currently only exposes the same `random_seed`/`start_action`/`rewards` fields every
+CloudAI agent gets from `BaseAgentConfig`.
+
 ## Ingest DSE Sweeps
 
 If a CloudAI scenario used a swept (sweep-configured) parameter, CloudAI's own
@@ -562,7 +598,8 @@ should keep working with zero services.
 Also shipped: `AutotuneOptimizeAgent` (`autotune/cloudai_agent.py`), a real
 `cloudai.agents` entry-point plugin that CloudAI discovers at startup with
 zero changes to CloudAI itself (see the "Later" item below for why this
-path, not a core PR). It reuses `_fit_efficiency_surface` and
+path, not a core PR; see "Use the Optimizer Agent Inside CloudAI" above for
+how to actually enable it in a test config). It reuses `_fit_efficiency_surface` and
 `_bounded_neighborhood` as-is, but fits against CloudAI's own per-trial
 `reward` instead of Autotune's throughput/latency-specific efficiency
 formula, so it isn't tied to one workload's named metrics. Verified two
