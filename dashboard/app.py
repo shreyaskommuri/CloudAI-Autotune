@@ -213,6 +213,22 @@ else:
         st.write("Pareto frontier (not beaten on both throughput and latency by another combo):")
         st.dataframe(pd.DataFrame(frontier_rows), width="stretch", hide_index=True)
 
+        frontier_ids = {id(combo) for combo in joint.frontier}
+        combo_rows = [
+            {
+                "throughput_tokens_per_sec": combo.throughput,
+                "latency_ms": combo.latency,
+                "category": "Pareto frontier" if id(combo) in frontier_ids else "Other",
+            }
+            for combo in joint.all_combos
+        ]
+        st.scatter_chart(
+            pd.DataFrame(combo_rows),
+            x="latency_ms",
+            y="throughput_tokens_per_sec",
+            color="category",
+        )
+
     with ExperimentDB(db_path) as db:
         pending = db.list_suggestions(selected_knobs)
         resolutions = resolve_pending_suggestions(filtered, selected_knobs, pending)
