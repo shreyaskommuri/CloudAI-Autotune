@@ -185,6 +185,13 @@ def test_multi_knob_section_shows_best_combo_and_frontier(multi_knob_db: Path):
     assert any({"serving.batch_size", "serving.num_requests", "efficiency"} <= columns for columns in dataframe_columns)
 
 
+def test_multi_knob_section_shows_a_frontier_scatter_chart(multi_knob_db: Path):
+    at = _load_with_knobs_selected(multi_knob_db)
+
+    assert not at.exception
+    assert len(at.main.get("vega_lite_chart")) >= 1
+
+
 def test_explore_mode_suggests_an_untried_combo(multi_knob_db: Path):
     at = _load_with_knobs_selected(multi_knob_db)
     at.main.radio[0].set_value("Explore")

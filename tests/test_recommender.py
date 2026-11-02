@@ -302,6 +302,21 @@ def test_recommend_joint_frontier_excludes_dominated_combos():
     assert {"serving.batch_size": 8, "serving.num_requests": 400} in frontier_values
 
 
+def test_recommend_joint_all_combos_includes_dominated_combos():
+    experiments = [
+        _combo_exp(1, 1, 100, throughput=100, latency=200),  # beaten on both axes by combo 2
+        _combo_exp(2, 4, 200, throughput=300, latency=150),
+    ]
+
+    rec = recommend_joint(experiments, knobs=["serving.batch_size", "serving.num_requests"])
+
+    all_values = [combo.values for combo in rec.all_combos]
+    assert {"serving.batch_size": 1, "serving.num_requests": 100} in all_values
+    assert {"serving.batch_size": 4, "serving.num_requests": 200} in all_values
+    assert len(rec.all_combos) == 2
+    assert len(rec.frontier) == 1
+
+
 def test_recommend_joint_frontier_keeps_real_tradeoffs():
     experiments = [
         _combo_exp(1, 4, 200, throughput=300, latency=120),  # lower latency, lower throughput

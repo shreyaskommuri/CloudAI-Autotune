@@ -53,6 +53,7 @@ class JointRecommendation:
     knobs: list[str]
     best: Optional[ComboResult]
     frontier: list[ComboResult]
+    all_combos: list[ComboResult]
     reason: str
 
 
@@ -296,6 +297,7 @@ def recommend_joint(
             knobs=list(knobs),
             best=None,
             frontier=[],
+            all_combos=[],
             reason=(
                 "No completed, in-budget experiments have values for all of "
                 f"{', '.join(knobs)} plus usable throughput and latency metrics yet."
@@ -311,6 +313,7 @@ def recommend_joint(
         knobs=list(knobs),
         best=best,
         frontier=frontier,
+        all_combos=combos,
         reason=(
             f"Best combo tried so far is {combo_desc} "
             f"({best.throughput:.0f} tok/s @ {best.latency:.0f}ms). "
